@@ -63,7 +63,8 @@ export function davHrefToKey(href: string): string {
 }
 
 function firstTag(parent: Element, localName: string): Element | undefined {
-  return parent.getElementsByTagName(localName)[0];
+  // 服务端返回带 d: 前缀的 DAV 元素；按 localName 匹配，兼容带前缀/默认/无命名空间。
+  return parent.getElementsByTagNameNS("*", localName)[0];
 }
 
 export async function fetchPath(path: string) {
@@ -82,7 +83,7 @@ export async function fetchPath(path: string) {
   const cwdKey = path.replace(/\/$/, "");
   const items: FileItem[] = [];
 
-  for (const response of Array.from(document.getElementsByTagName("response"))) {
+  for (const response of Array.from(document.getElementsByTagNameNS("*", "response"))) {
     const href = firstTag(response, "href")?.textContent ?? "";
     const key = davHrefToKey(href);
     if (!href) continue;
@@ -97,7 +98,7 @@ export async function fetchPath(path: string) {
     const resourceType = firstTag(response, "resourcetype");
     const isDir =
       contentType === "application/x-directory" ||
-      Boolean(resourceType?.getElementsByTagName("collection").length);
+      Boolean(resourceType?.getElementsByTagNameNS("*", "collection").length);
 
     items.push({
       key,
