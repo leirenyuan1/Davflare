@@ -17,6 +17,7 @@ import { authFetch } from "./app/auth";
 import { NotifyFn } from "./app/notify";
 import { strings, translate } from "./app/strings";
 import { errorMessage } from "./app/utils";
+import ObsidianSyncCard from "./ObsidianSyncCard";
 
 interface WebDavInfo {
   username: string;
@@ -34,7 +35,8 @@ function WebDavPanel({
 }) {
   const [info, setInfo] = useState<WebDavInfo | null>(null);
   const [loading, setLoading] = useState(false);
-  const webdavUrl = `${window.location.origin}/webdav`;
+  // 挂载地址与 Obsidian 卡片统一用带结尾斜杠的集合地址（两种写法服务端都接受）
+  const webdavUrl = `${window.location.origin}/webdav/`;
 
   useEffect(() => {
     if (!open) return;
@@ -149,6 +151,11 @@ function WebDavPanel({
                 {strings.copyWebDavGuide}
               </Button>
             </Box>
+            <ObsidianSyncCard
+              serverAddress={webdavUrl}
+              username={info?.username}
+              onCopy={copy}
+            />
           </Stack>
         )}
       </DialogContent>

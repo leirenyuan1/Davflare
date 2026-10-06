@@ -1,13 +1,20 @@
-// 导航站 / 相册站的静态页：自包含 HTML，视觉对齐 WebDAV 目录页暖纸感
+// 导航站 / 相册站 / 公开目录 / 文档站的静态页：自包含 HTML，视觉对齐 WebDAV 目录页暖纸感
 // （#f4f1ec / #f38020，prefers-color-scheme）。只做校验、转义与渲染；
 // 写入 sites/{slug}/ 由 functions/api/sites.ts 负责。
 import dictionary from "../src/app/stringsDictionary";
+import { ALBUM_MANIFEST_NAME, isSafeManifestRel, parseSiteManifest } from "./siteManifest";
+
+export { ALBUM_MANIFEST_NAME, isSafeManifestRel };
 
 export const NAV_MAX_LINKS = 1000;
 export const ALBUM_MAX_IMAGES = 200;
 export const ALBUM_MAX_BYTES = 100 * 1024 * 1024;
-/** 相册清单：相对路径列表。不是图片，画廊不得引用它。 */
-export const ALBUM_MANIFEST_NAME = ".davflare-album.json";
+/** 公开目录：每次最多 500 个文件、总共 2GB（只取文件夹当前层）。 */
+export const DIR_MAX_FILES = 500;
+export const DIR_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+/** 文档站：Markdown + 被引用图片合计最多 200 个文件、100MB。 */
+export const DOCS_MAX_FILES = 200;
+export const DOCS_MAX_BYTES = 100 * 1024 * 1024;
 
 export type PageLang = "zh" | "en";
 
@@ -221,33 +228,9 @@ export function checkAlbumLimits(
   return { ok: true };
 }
 
-export function isSafeManifestRel(rel: string): boolean {
-  if (!rel || rel.length > 500) return false;
-  if (rel.startsWith("/") || rel.startsWith("\\")) return false;
-  if (rel.includes("\\") || rel.includes("\u0000")) return false;
-  if (rel.split("/").some((part) => !part || part === "." || part === "..")) return false;
-  if (rel.includes("_$flaredrive$")) return false;
-  return true;
-}
-
+/** 相册清单解析：通用清单解析 + 相册自己的条目上限（行为与 #142 一致）。 */
 export function parseAlbumManifest(text: string): string[] {
-  let data: unknown;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  if (data === null || typeof data !== "object" || Array.isArray(data)) return [];
-  const files = (data as { files?: unknown }).files;
-  if (!Array.isArray(files)) return [];
-  const out: string[] = [];
-  for (const item of files) {
-    if (typeof item !== "string") continue;
-    if (!isSafeManifestRel(item)) continue;
-    if (!out.includes(item)) out.push(item);
-    if (out.length >= ALBUM_MAX_IMAGES + 8) break;
-  }
-  return out;
+  return parseSiteManifest(text, ALBUM_MAX_IMAGES + 8).files;
 }
 
 const PAGE_CSS = `
@@ -323,6 +306,71 @@ h1 { font-size: 1.35rem; margin: 0 0 6px; letter-spacing: -.02em; }
   padding: 8px 14px; font: inherit; cursor: pointer;
 }
 .lb-cap { color: #fff; margin: 0; font-size: .9rem; }
+.files { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.files th {
+  text-align: left; font-weight: 600; font-size: .8rem; color: var(--muted);
+  padding: 6px 10px; border-bottom: 1px solid var(--line);
+}
+.files td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.files tr:last-child td { border-bottom: 0; }
+.files td.name { word-break: break-all; }
+.files td.name a { color: inherit; text-decoration: none; }
+.files td.name a:hover { color: var(--brand); }
+.files td.num, .files th.num { text-align: right; white-space: nowrap; }
+.files td.time { color: var(--muted); white-space: nowrap; }
+.files a.dl { color: var(--brand); text-decoration: none; white-space: nowrap; }
+.files a.dl:hover { text-decoration: underline; }
+.note { color: var(--muted); font-size: .85rem; margin: 14px 2px 0; }
+@media (max-width: 600px) { .files td.time, .files th.time { display: none; } }
+.docs { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; }
+.toc {
+  position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto;
+  background: var(--paper); border-radius: 16px; box-shadow: var(--shadow); padding: 12px 8px;
+}
+.toc .home {
+  display: block; padding: 6px 10px 8px; font-weight: 700; color: inherit; text-decoration: none;
+  border-bottom: 1px solid var(--line); margin-bottom: 6px; word-break: break-word;
+}
+.toc ol { list-style: none; margin: 0; padding: 0; }
+.toc li a {
+  display: block; padding: 6px 10px; border-radius: 10px; color: inherit;
+  text-decoration: none; font-size: .9rem; word-break: break-word;
+}
+.toc li a:hover { background: var(--hover); color: var(--brand); }
+.toc li a[aria-current="page"] { background: var(--hover); color: var(--brand); font-weight: 600; }
+.doc { padding: 22px 24px 26px; min-width: 0; }
+.md { overflow-wrap: break-word; }
+.md > :first-child { margin-top: 0; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { line-height: 1.3; margin: 1.4em 0 .5em; letter-spacing: -.01em; }
+.md h1 { font-size: 1.55rem; }
+.md h2 { font-size: 1.25rem; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.md h3 { font-size: 1.08rem; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md table { margin: 0 0 1em; }
+.md a { color: var(--brand); }
+.md img { max-width: 100%; height: auto; border-radius: 8px; }
+.md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em;
+  background: var(--hover); padding: .1em .35em; border-radius: 5px;
+}
+.md pre { background: var(--hover); padding: 12px 14px; border-radius: 10px; overflow: auto; }
+.md pre code { background: transparent; padding: 0; }
+.md blockquote { margin-left: 0; padding: 2px 14px; border-left: 3px solid var(--brand); color: var(--muted); }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 6px 10px; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 1.6em 0; }
+.doc-list { list-style: none; margin: 0; padding: 0; }
+.doc-list li a {
+  display: block; padding: 10px; border-radius: 10px; color: inherit; text-decoration: none;
+  border-bottom: 1px solid var(--line);
+}
+.doc-list li:last-child a { border-bottom: 0; }
+.doc-list li a:hover { background: var(--hover); color: var(--brand); }
+.doc-list small { display: block; color: var(--muted); font-size: .8rem; }
+@media (max-width: 760px) {
+  .docs { grid-template-columns: 1fr; }
+  .toc { position: static; max-height: none; }
+  .doc { padding: 18px 16px 20px; }
+}
 `;
 
 function docShell(lang: PageLang, title: string, body: string, extraScript = ""): string {
@@ -467,4 +515,196 @@ export function renderAlbumPage(options: {
 })();
 </script>`;
   return docShell(lang, options.title, body, script);
+}
+
+export type DirFile = { name: string; size: number; uploaded: string };
+
+export function checkDirLimits(
+  count: number,
+  bytes: number
+): { ok: true } | { ok: false; error: string } {
+  if (!Number.isFinite(count) || count <= 0) return { ok: false, error: "no files" };
+  if (count > DIR_MAX_FILES) {
+    return { ok: false, error: `file limit exceeded: ${count} > ${DIR_MAX_FILES}` };
+  }
+  if (!Number.isFinite(bytes) || bytes < 0) return { ok: false, error: "bad dir" };
+  if (bytes > DIR_MAX_BYTES) {
+    return { ok: false, error: `size limit exceeded: ${bytes} > ${DIR_MAX_BYTES}` };
+  }
+  return { ok: true };
+}
+
+/** 1536 → "1.5 KB"；与网盘的 humanReadableSize 同一套 1024 进制单位。 */
+export function formatSiteBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const text = unit === 0 ? String(Math.round(value)) : value.toFixed(value >= 100 ? 0 : 1);
+  return `${text} ${units[unit]}`;
+}
+
+/** 零 JS 页面没法按访客时区显示，统一用 UTC 并标注。 */
+export function formatSiteTime(value: string): { iso: string; text: string } | null {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return null;
+  const iso = new Date(time).toISOString();
+  return { iso, text: `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC` };
+}
+
+export function renderDirPage(options: {
+  lang: PageLang;
+  title: string;
+  files: DirFile[];
+  subdirs?: number;
+}): string {
+  if (options.files.length > DIR_MAX_FILES) {
+    throw new Error(`file limit exceeded: ${options.files.length} > ${DIR_MAX_FILES}`);
+  }
+  const lang = options.lang === "zh" ? "zh" : "en";
+  const files = options.files.filter((file) => file.name);
+  const total = files.reduce((sum, file) => sum + (Number.isFinite(file.size) ? file.size : 0), 0);
+  const rows = files
+    .map((file) => {
+      const name = escapeHtml(file.name);
+      const href = escapeHtml(encodeURIComponent(file.name));
+      const time = formatSiteTime(file.uploaded);
+      const timeCell = time
+        ? `<time datetime="${escapeHtml(time.iso)}">${escapeHtml(time.text)}</time>`
+        : "";
+      return `<tr><td class="name"><a href="${href}" download="${name}">${name}</a></td><td class="num">${escapeHtml(formatSiteBytes(file.size))}</td><td class="time">${timeCell}</td><td class="num"><a class="dl" href="${href}" download="${name}">${escapeHtml(pageLabel(lang, "siteDirDownload"))}</a></td></tr>`;
+    })
+    .join("");
+  const subdirs = Math.max(0, Math.floor(options.subdirs || 0));
+  const table = rows
+    ? `<table class="files"><thead><tr><th>${escapeHtml(pageLabel(lang, "siteDirName"))}</th><th class="num">${escapeHtml(pageLabel(lang, "siteDirSize"))}</th><th class="time">${escapeHtml(pageLabel(lang, "siteDirModified"))}</th><th class="num"></th></tr></thead><tbody>${rows}</tbody></table>`
+    : `<p class="empty">${escapeHtml(pageLabel(lang, "siteDirEmpty"))}</p>`;
+  const body = `<section class="card">
+  <h1>${escapeHtml(options.title)}</h1>
+  <p class="meta">${escapeHtml(pageLabel(lang, "siteDirCount", { count: files.length, size: formatSiteBytes(total) }))}</p>
+  ${table}
+</section>
+${subdirs > 0 ? `<p class="note">${escapeHtml(pageLabel(lang, "siteDirSubdirsNote", { count: subdirs }))}</p>` : ""}`;
+  return docShell(lang, options.title, body);
+}
+
+/**
+ * 文档站的「发布范围」（#153）：所选笔记的公共目录。图片只能来自这个目录的子树。
+ * 范围是网盘根目录（笔记在根目录，或分散在不同顶层文件夹）时只认根目录当前层，绝不放开到全盘。
+ */
+export function docsScopeOf(keys: string[]): string {
+  let common: string[] | null = null;
+  for (const key of keys) {
+    const parts = key.split("/").filter(Boolean);
+    parts.pop();
+    if (common === null) {
+      common = parts;
+      continue;
+    }
+    let i = 0;
+    while (i < common.length && i < parts.length && common[i] === parts[i]) i += 1;
+    common = common.slice(0, i);
+  }
+  return (common ?? []).join("/");
+}
+
+export function isInDocsScope(key: string, scope: string): boolean {
+  if (!key || key.includes("_$flaredrive$")) return false;
+  if (key.split("/").some((part) => !part || part === "." || part === "..")) return false;
+  if (!scope) return !key.includes("/");
+  return key.startsWith(`${scope}/`);
+}
+
+/** 文件名按 UTF-16 长度截短但保留扩展名，且不切断代理对（#153：长文件名不再让整次发布 400）。 */
+export function shortenFileName(name: string, max: number): string {
+  if (name.length <= max) return name;
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 && name.length - dot <= 16 ? name.slice(dot) : "";
+  const budget = Math.max(1, max - ext.length);
+  let stem = "";
+  for (const ch of Array.from(ext ? name.slice(0, dot) : name)) {
+    if (stem.length + ch.length > budget) break;
+    stem += ch;
+  }
+  return `${stem.trimEnd() || "file"}${ext}`;
+}
+
+export function checkDocsLimits(
+  pages: number,
+  images: number,
+  bytes: number
+): { ok: true } | { ok: false; error: string } {
+  if (!Number.isFinite(pages) || pages <= 0) return { ok: false, error: "no files" };
+  const count = pages + (Number.isFinite(images) && images > 0 ? images : 0);
+  if (count > DOCS_MAX_FILES) {
+    return { ok: false, error: `file limit exceeded: ${count} > ${DOCS_MAX_FILES}` };
+  }
+  if (!Number.isFinite(bytes) || bytes < 0) return { ok: false, error: "bad docs" };
+  if (bytes > DOCS_MAX_BYTES) {
+    return { ok: false, error: `size limit exceeded: ${bytes} > ${DOCS_MAX_BYTES}` };
+  }
+  return { ok: true };
+}
+
+export type DocsNavItem = { href: string; title: string; file?: string };
+
+function renderDocsToc(lang: PageLang, siteTitle: string, nav: DocsNavItem[], current: string | null) {
+  const items = nav
+    .map((item) => {
+      const currentAttr = item.href === current ? ' aria-current="page"' : "";
+      return `<li><a href="${escapeHtml(encodeURIComponent(item.href))}"${currentAttr}>${escapeHtml(item.title)}</a></li>`;
+    })
+    .join("");
+  const homeCurrent = current === null ? ' aria-current="page"' : "";
+  return `<nav class="toc" aria-label="${escapeHtml(pageLabel(lang, "siteDocsToc"))}"><a class="home" href="index.html"${homeCurrent}>${escapeHtml(siteTitle)}</a><ol>${items}</ol></nav>`;
+}
+
+/**
+ * 文档站单篇页面。bodyHtml 来自浏览器端 markdown-it（html:false，原始 HTML 已被转义、危险链接已被拦截），
+ * 这里原样嵌入；其余所有文本都在这里转义。零 JS。
+ */
+export function renderDocsPage(options: {
+  lang: PageLang;
+  siteTitle: string;
+  pageTitle: string;
+  nav: DocsNavItem[];
+  current: string;
+  bodyHtml: string;
+}): string {
+  const lang = options.lang === "zh" ? "zh" : "en";
+  const body = `<div class="docs">
+  ${renderDocsToc(lang, options.siteTitle, options.nav, options.current)}
+  <main class="card doc"><article class="md">${options.bodyHtml}</article></main>
+</div>`;
+  return docShell(lang, `${options.pageTitle} · ${options.siteTitle}`, body);
+}
+
+/** 文档站首页：侧边栏目录 + 文档列表。 */
+export function renderDocsIndex(options: {
+  lang: PageLang;
+  siteTitle: string;
+  nav: DocsNavItem[];
+}): string {
+  const lang = options.lang === "zh" ? "zh" : "en";
+  const list = options.nav.length
+    ? `<ol class="doc-list">${options.nav
+        .map((item) => {
+          const file = item.file && item.file !== item.title ? `<small>${escapeHtml(item.file)}</small>` : "";
+          return `<li><a href="${escapeHtml(encodeURIComponent(item.href))}">${escapeHtml(item.title)}${file}</a></li>`;
+        })
+        .join("")}</ol>`
+    : `<p class="empty">${escapeHtml(pageLabel(lang, "siteDocsEmpty"))}</p>`;
+  const body = `<div class="docs">
+  ${renderDocsToc(lang, options.siteTitle, options.nav, null)}
+  <main class="card doc">
+    <h1>${escapeHtml(options.siteTitle)}</h1>
+    <p class="meta">${escapeHtml(pageLabel(lang, "siteDocsCount", { count: options.nav.length }))}</p>
+    ${list}
+  </main>
+</div>`;
+  return docShell(lang, options.siteTitle, body);
 }

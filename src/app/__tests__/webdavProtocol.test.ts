@@ -126,6 +126,29 @@ describe("webdav OPTIONS / redirect / auth", () => {
     }
   });
 
+  test("CORS preflight allows Cache-Control (Obsidian Remotely Save sends it on every request)", async () => {
+    const bucket = new InMemoryBucket();
+    for (const origin of ["app://obsidian.md", "capacitor://localhost"]) {
+      const response = await call(
+        req("/webdav/vault/", "OPTIONS", {
+          Origin: origin,
+          "Access-Control-Request-Method": "PROPFIND",
+          "Access-Control-Request-Headers": "authorization,cache-control,content-type,depth",
+        }),
+        makeEnv(bucket)
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe(origin);
+      const allowed = (response.headers.get("Access-Control-Allow-Headers") ?? "")
+        .split(/,\s*/)
+        .map((name) => name.toLowerCase());
+      for (const name of ["authorization", "cache-control", "content-type", "depth", "destination", "overwrite"]) {
+        expect(allowed).toContain(name);
+      }
+      expect(response.headers.get("Access-Control-Allow-Methods")).toContain("PROPFIND");
+    }
+  });
+
   test("/webdav without trailing slash is a 307 redirect (no auth needed)", async () => {
     const bucket = new InMemoryBucket();
     const response = await call(req("/webdav", "GET"), makeEnv(bucket));
@@ -361,6 +384,34 @@ describe("webdav MKCOL", () => {
 });
 
 describe("webdav GET / HEAD", () => {
+  test("stored active types never execute on the drive origin: nosniff + CSP sandbox", async () => {
+    const bucket = new InMemoryBucket();
+    bucket.seed([
+      { key: "evil.html", body: "<script>alert(1)</script>", contentType: "text/html" },
+      { key: "evil.svg", body: "<svg onload='alert(1)'/>", contentType: "image/svg+xml" },
+      { key: "evil.xhtml", body: "<x/>", contentType: "application/xhtml+xml" },
+      { key: "blob.bin", body: "<script>", contentType: "application/octet-stream" },
+      { key: "note.txt", body: "hi", contentType: "text/plain" },
+      { key: "pic.png", body: "png", contentType: "image/png" },
+      { key: "doc.pdf", body: "%PDF", contentType: "application/pdf" },
+      { key: "clip.mp4", body: "mp4", contentType: "video/mp4" },
+    ]);
+    for (const key of ["evil.html", "evil.svg", "evil.xhtml", "blob.bin", "note.txt"]) {
+      const response = await call(req(`/webdav/${key}`, "GET", { Authorization: AUTH }), makeEnv(bucket));
+      expect(response.status).toBe(200);
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(response.headers.get("Content-Security-Policy")).toBe("sandbox");
+    }
+    for (const key of ["pic.png", "doc.pdf", "clip.mp4"]) {
+      const response = await call(req(`/webdav/${key}`, "GET", { Authorization: AUTH }), makeEnv(bucket));
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      // PDF 在 sandbox 文档里 Chrome 不渲染：媒体类型不加 sandbox
+      expect(response.headers.get("Content-Security-Policy")).toBeNull();
+    }
+    const head = await call(req("/webdav/evil.html", "HEAD", { Authorization: AUTH }), makeEnv(bucket));
+    expect(head.headers.get("Content-Security-Policy")).toBe("sandbox");
+  });
+
   test("GET returns content with metadata headers", async () => {
     const bucket = new InMemoryBucket();
     bucket.seed([
@@ -633,6 +684,34 @@ describe("webdav PUT", () => {
     expect(head?.httpMetadata?.contentType).toBe("text/plain");
   });
 
+  test("generic or missing Content-Type is filled from a safe extension map", async () => {
+    const bucket = new InMemoryBucket();
+    const bytes = () => new Uint8Array([1, 2, 3]).buffer;
+    const put = (path: string, headers: Record<string, string>) =>
+      call(req(path, "PUT", { Authorization: AUTH, ...headers }, bytes()), makeEnv(bucket));
+
+    expect((await put("/webdav/%E6%88%AA%E5%9B%BE%201.PNG", { "Content-Type": "application/octet-stream" })).status).toBe(201);
+    expect((await put("/webdav/paper.pdf", {})).status).toBe(201);
+    expect((await put("/webdav/note.md", { "Content-Type": "application/octet-stream" })).status).toBe(201);
+    expect((await put("/webdav/declared.png", { "Content-Type": "image/x-custom" })).status).toBe(201);
+    expect((await put("/webdav/page.html", { "Content-Type": "application/octet-stream" })).status).toBe(201);
+    expect((await put("/webdav/icon.svg", { "Content-Type": "application/octet-stream" })).status).toBe(201);
+    expect((await put("/webdav/noext", { "Content-Type": "application/octet-stream" })).status).toBe(201);
+
+    const type = async (key: string) => (await bucket.asBucket().head(key))?.httpMetadata?.contentType;
+    expect(await type("截图 1.PNG")).toBe("image/png");
+    expect(await type("paper.pdf")).toBe("application/pdf");
+    expect(await type("note.md")).toBe("text/markdown");
+    expect(await type("declared.png")).toBe("image/x-custom");
+    // 不猜可执行/可渲染为页面的类型，同源下不能让上传内容变成页面
+    expect(await type("page.html")).toBe("application/octet-stream");
+    expect(await type("icon.svg")).toBe("application/octet-stream");
+    expect(await type("noext")).toBe("application/octet-stream");
+
+    const get = await call(req("/webdav/note.md", "GET", { Authorization: AUTH }), makeEnv(bucket));
+    expect(get.headers.get("Content-Type")).toBe("text/markdown; charset=utf-8");
+  });
+
   test("If-Match mismatch is 412, match succeeds", async () => {
     const bucket = new InMemoryBucket();
     bucket.seed([{ key: "a.txt", body: "old" }]);
@@ -750,6 +829,8 @@ describe("webdav PUT", () => {
       makeEnv(bucket)
     );
     expect(response.status).toBe(413);
+    // 文案与卡片 / README / docs 统一为 100MB（服务端实际上限）
+    expect(await response.text()).toContain("100MB");
   });
 });
 

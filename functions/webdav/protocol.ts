@@ -1,6 +1,6 @@
 // WebDAV 方法实现与请求分发；工具层在 davUtil/davXml/davLock，类型在 davTypes。
 import { utf8ToBase64 } from "../api/_apikey";
-import { withUtf8Charset } from "../_contentType";
+import { applyStoredContentHardening, withUtf8Charset } from "../_contentType";
 import { acceptListingLang, renderListingPage, type ListingEntry } from "./listingPage";
 import {
   DAV_ENDPOINT,
@@ -27,6 +27,7 @@ import {
   thumbnailObjectKey,
   thumbnailRefKey,
   timingSafeEqual,
+  uploadHttpMetadata,
 } from "./davUtil";
 import {
   DAV_NAMESPACE,
@@ -200,7 +201,9 @@ async function handleGet({
   const rangeRequested = request.headers.has("Range") && object.range !== undefined;
   const headers = new Headers();
   headers.set("Accept-Ranges", "bytes");
-  headers.set("Content-Type", withUtf8Charset(object.httpMetadata?.contentType ?? "application/octet-stream"));
+  const contentType = withUtf8Charset(object.httpMetadata?.contentType ?? "application/octet-stream");
+  headers.set("Content-Type", contentType);
+  applyStoredContentHardening(headers, contentType);
   headers.set("Content-Length", contentLength.toString());
   headers.set("ETag", object.httpEtag);
   headers.set("Last-Modified", object.uploaded.toUTCString());
@@ -292,11 +295,11 @@ async function handlePut({
   }
 
   const contentLength = Number(request.headers.get("Content-Length") || "0");
-  // Cloudflare Workers/Pages 单次请求体约 100–128MB。超过时给出明确中文说明，
+  // Cloudflare Pages Functions（免费 / Pro 计划）单次请求体上限 100MB。超过时给出明确中文说明，
   // 避免客户端只看到泛化的 413/网络错误。分块上传走 uploadId+partNumber，不受此限。
   if (Number.isFinite(contentLength) && contentLength >= 100 * 1024 * 1024) {
     return new Response(
-      "单次上传超过 Cloudflare 约 128MB 的请求限制，无法通过 WebDAV 直传。请改用网页端分块上传（支持大文件与断点续传）。",
+      "单个文件需小于 100MB（Cloudflare 单次请求体上限），无法通过 WebDAV 直传。请改用网页端分块上传（支持大文件与断点续传）。",
       { status: 413, headers: { "Content-Type": "text/plain; charset=utf-8" } },
     );
   }
@@ -348,7 +351,7 @@ async function handlePut({
     conditionalHeaders.has("if-range");
   const result = await bucket.put(path, body, {
     ...(hasPreconditions ? { onlyIf: conditionalHeaders } : {}),
-    httpMetadata: request.headers,
+    httpMetadata: uploadHttpMetadata(request.headers, path),
     customMetadata: preservedMetadata,
   });
   if (!result) {
@@ -1395,6 +1398,9 @@ function addCorsHeaders(response: Response, request: Request): Response {
       "lock-token",
       "timeout",
       "fd-thumbnail",
+      // Obsidian Remotely Save 每个请求都带 Cache-Control: no-cache；不放行时走 fetch 的客户端（旧版移动端、浏览器）会被预检拦下
+      "cache-control",
+      "pragma",
     ].join(", "),
   );
   response.headers.set(

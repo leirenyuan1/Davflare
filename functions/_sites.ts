@@ -1,8 +1,10 @@
 import {
+  isCollectionObject,
   parseBasicAuthHeader,
   sha256Hex,
   timingSafeEqual,
 } from "./api/_apikey";
+import { contentDisposition } from "./api/_disposition";
 
 export const SITES_PREFIX = "sites/";
 
@@ -31,6 +33,8 @@ export interface SiteConfig {
   passwordHash?: string;
   /** Optional custom hostname (e.g. blog.example.com); served at domain root. */
   hostname?: string;
+  /** 最近一次「从网盘文件夹发布」（普通静态站 / 公开目录）的源文件夹；发布前占用检查用（#151） */
+  source?: string;
   stats?: SiteStats;
 }
 
@@ -95,6 +99,26 @@ export async function loadSiteConfig(
   } catch {
     return null;
   }
+}
+
+/**
+ * 记下这个站点最近一次发布的源文件夹（null = 不是从单个文件夹发布，清掉旧值）。
+ * 配置不存在且无需记录时不写，避免为相册 / 文档站凭空生成配置文件。
+ */
+export async function recordSiteSource(
+  bucket: R2Bucket,
+  slug: string,
+  source: string | null
+): Promise<void> {
+  const existing = await loadSiteConfig(bucket, slug);
+  if (!existing && !source) return;
+  const config: SiteConfig = { ...(existing || {}), slug };
+  if ((config.source || null) === source) return;
+  if (source) config.source = source;
+  else delete config.source;
+  await bucket.put(siteConfigKey(slug), JSON.stringify(config), {
+    httpMetadata: { contentType: "application/json" },
+  });
 }
 
 const MIME: Record<string, string> = {
@@ -203,7 +227,7 @@ export async function deleteHostnameIndex(
 export function parseSitesRootPath(
   pathname: string,
   slug: string
-): { ok: true; slug: string; key: string; tryIndex: boolean } | { ok: false; reason: string } {
+): ParsedSitePath | { ok: false; reason: string } {
   const normalizedSlug = slug.toLowerCase();
   if (!SLUG_RE.test(normalizedSlug)) return { ok: false, reason: "bad slug" };
   const raw = pathname.replace(/\\/g, "/");
@@ -257,9 +281,19 @@ function decodeSegment(segment: string): string {
   }
 }
 
+export interface ParsedSitePath {
+  ok: true;
+  slug: string;
+  key: string;
+  /** 无扩展名、不带结尾斜杠：对象不存在时尝试 `{key}/index.html`（命中则 301 到带斜杠地址） */
+  tryIndex: boolean;
+  /** 站点根不带结尾斜杠：无需读 R2，直接 301 到带斜杠地址 */
+  redirectToSlash?: boolean;
+}
+
 export function parseSitesPath(
   pathname: string
-): { ok: true; slug: string; key: string; tryIndex: boolean } | { ok: false; reason: string } {
+): ParsedSitePath | { ok: false; reason: string } {
   const raw = pathname.replace(/\\/g, "/");
   // 逐段解码后校验：%2e%2e 之类的编码穿越同样被拦，编码斜杠视为非法；
   // 而文件名内部的 "a..b.html"、空格、中文等合法字符不再被误伤
@@ -277,6 +311,16 @@ export function parseSitesPath(
   const rest = parts.slice(1);
   const trailingSlash = raw.endsWith("/");
   if (rest.length === 0) {
+    // `/{slug}` 不带结尾斜杠：页面里的相对链接会解析到域名根（#145），由调用方 301 到 `/{slug}/`
+    if (!trailingSlash) {
+      return {
+        ok: true,
+        slug,
+        key: `${SITES_PREFIX}${slug}/index.html`,
+        tryIndex: false,
+        redirectToSlash: true,
+      };
+    }
     return { ok: true, slug, key: `${SITES_PREFIX}${slug}/index.html`, tryIndex: false };
   }
   const file = rest.join("/");
@@ -292,8 +336,46 @@ export function parseSitesPath(
   };
 }
 
+/**
+ * 网盘里的「文件夹」对象（#157）：WebDAV MKCOL、网页「新建文件夹」、上传 API 建的目录标记
+ * （0 字节，Content-Type application/x-directory 或 resourcetype <collection />），
+ * 以及 S3 工具常见的以 `/` 结尾的 key。站点上它们是目录，绝不能当文件 200 返回。
+ */
+export function isSiteFolderMarker(
+  key: string,
+  object: { httpMetadata?: R2HTTPMetadata; customMetadata?: Record<string, string> } | null
+): boolean {
+  if (!object) return false;
+  return key.endsWith("/") || isCollectionObject(object);
+}
+
 export function indexFallbackKey(key: string): string {
   return key.endsWith("/") ? `${key}index.html` : `${key}/index.html`;
+}
+
+/**
+ * 目录地址补结尾斜杠（#145）：`/{slug}` → `/{slug}/`、`/{slug}/sub` → `/{slug}/sub/`，保留查询串。
+ * Location 用绝对地址，避免 `//evil.com` 这类路径被当成协议相对地址的开放跳转。
+ */
+export function sitesSlashRedirect(
+  requestUrl: string,
+  options?: { privateCache?: boolean }
+): Response {
+  const url = new URL(requestUrl);
+  const location = `${url.origin}${url.pathname.replace(/\/+$/, "")}/${url.search}`;
+  const headers = new Headers({
+    Location: location,
+    "Content-Type": "text/plain; charset=utf-8",
+    "X-Content-Type-Options": "nosniff",
+    "X-Robots-Tag": "noindex",
+  });
+  if (options?.privateCache) {
+    headers.set("Cache-Control", "private, max-age=60");
+    headers.set("Vary", "Authorization");
+  } else {
+    headers.set("Cache-Control", "public, max-age=300");
+  }
+  return new Response(null, { status: 301, headers });
 }
 
 export function sitesNotFound(): Response {
@@ -311,11 +393,17 @@ export function sitesResponse(
   object: { body: ReadableStream | null; httpEtag?: string },
   key: string,
   head: boolean,
-  options?: { privateCache?: boolean }
+  options?: { privateCache?: boolean; download?: boolean }
 ) {
   const headers = new Headers();
   headers.set("Content-Type", mimeForKey(key));
   headers.set("X-Content-Type-Options", "nosniff");
+  if (options?.download) {
+    // 生成型站点里的 html/svg/xml/js（#146）：强制下载；万一客户端无视 Content-Disposition，
+    // CSP sandbox 也让它在不透明源里打开，脚本碰不到共享站点域名
+    headers.set("Content-Disposition", contentDisposition(key.split("/").pop() || "", "attachment"));
+    headers.set("Content-Security-Policy", "sandbox");
+  }
   if (options?.privateCache) {
     // Password-gated sites must not land in shared CDN caches.
     headers.set("Cache-Control", "private, max-age=60");

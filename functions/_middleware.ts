@@ -6,6 +6,7 @@ import {
 } from "./_images";
 import {
   indexFallbackKey,
+  isSiteFolderMarker,
   isSitesHost,
   loadSiteConfig,
   loadSlugForHostname,
@@ -16,8 +17,11 @@ import {
   sitesNotFound,
   sitesNotFoundPage,
   sitesResponse,
+  sitesSlashRedirect,
   sitesUnauthorized,
+  SITES_PREFIX,
 } from "./_sites";
+import { loadSiteManifestKind, siteFileForcesDownload } from "./siteManifest";
 
 interface MiddlewareEnv {
   BUCKET: R2Bucket;
@@ -46,9 +50,11 @@ async function serveImage(
 
 async function serveSlugSite(
   context: EventContext<MiddlewareEnv, any, any>,
-  parsed: { slug: string; key: string; tryIndex: boolean }
+  parsed: { slug: string; key: string; tryIndex: boolean; redirectToSlash?: boolean }
 ): Promise<Response> {
   const method = context.request.method.toUpperCase();
+  // 站点根不带斜杠：无条件跳转，不读 R2，也不泄露站点是否存在 / 是否加密（#145）
+  if (parsed.redirectToSlash) return sitesSlashRedirect(context.request.url);
   // Password gate runs before any content (and before a future _redirects hook).
   // Load config once up front so SPA/404 reuse it without a second R2 get.
   const config = await loadSiteConfig(context.env.BUCKET, parsed.slug);
@@ -60,11 +66,30 @@ async function serveSlugSite(
     }
   }
 
-  let key = parsed.key;
-  let object = await context.env.BUCKET.get(key);
-  if (!object && parsed.tryIndex) {
-    key = indexFallbackKey(parsed.key);
-    object = await context.env.BUCKET.get(key);
+  // 生成型站点（公开目录 / 相册 / 文档站）里的 active 文件强制下载（#146）。
+  // 清单只在请求 active 类型时才读，且与正文读取并行；同一请求内最多读一次。
+  const sitePrefix = `${SITES_PREFIX}${parsed.slug}/`;
+  let kindPromise: Promise<string | null> | null = null;
+  const forcesDownload = async (objectKey: string): Promise<boolean> => {
+    const rel = objectKey.slice(sitePrefix.length);
+    if (!siteFileForcesDownload("dir", rel)) return false; // 不是 active 类型 / 是首页：无需读清单
+    kindPromise ??= loadSiteManifestKind(context.env.BUCKET, sitePrefix);
+    return siteFileForcesDownload(await kindPromise, rel);
+  };
+  if (siteFileForcesDownload("dir", parsed.key.slice(sitePrefix.length))) {
+    kindPromise = loadSiteManifestKind(context.env.BUCKET, sitePrefix);
+  }
+
+  const key = parsed.key;
+  let object: R2ObjectBody | null = await context.env.BUCKET.get(key);
+  // 文件夹标记对象（MKCOL / 新建文件夹 / 上传 API 建的目录）按目录处理，绝不当空文件 200 返回（#157）
+  const folderMarker = isSiteFolderMarker(key, object);
+  if (folderMarker) object = null; // 标记对象是 0 字节，不读正文
+  if (!object && (parsed.tryIndex || folderMarker) && !key.endsWith("/")) {
+    // `/{slug}/sub` 不是文件但 `sub/index.html` 存在：跳到 `/{slug}/sub/`，
+    // 否则页面里的相对链接会按上一级目录解析（#145）。只需 head，不读正文。
+    const indexHead = await context.env.BUCKET.head(indexFallbackKey(parsed.key));
+    if (indexHead) return sitesSlashRedirect(context.request.url, { privateCache });
   }
   if (!object) {
     if (config?.spa) {
@@ -82,7 +107,8 @@ async function serveSlugSite(
     const notFoundObject = await context.env.BUCKET.get(
       siteNotFoundKey(parsed.slug)
     );
-    if (notFoundObject) {
+    // 生成型站点里的 404.html 是复制进来的用户文件，不能当页面渲染（#146）
+    if (notFoundObject && !(await forcesDownload(siteNotFoundKey(parsed.slug)))) {
       return sitesNotFoundPage({ body: notFoundObject.body }, method === "HEAD");
     }
     return sitesNotFound();
@@ -92,7 +118,7 @@ async function serveSlugSite(
     { body: object.body, httpEtag: object.httpEtag },
     key,
     method === "HEAD",
-    { privateCache }
+    { privateCache, download: await forcesDownload(key) }
   );
 }
 
