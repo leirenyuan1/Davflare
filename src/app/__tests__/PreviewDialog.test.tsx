@@ -389,3 +389,145 @@ describe("PreviewDialog leftovers", () => {
     await waitFor(() => expect(document.querySelector("iframe")).toBeTruthy());
   });
 });
+
+describe("PDF preview title (#149)", () => {
+  test("iframe shows a copy titled with the file name; download keeps the original bytes", async () => {
+    const original =
+      "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n0 2\n0000000000 65535 f\r\n0000000009 00000 n\r\n" +
+      "trailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n47\n%%EOF\n";
+    const source = new Blob([original], { type: "application/pdf" });
+    mockAuthFetch.mockResolvedValue({ ok: true, headers: { get: () => null }, blob: async () => source, body: null });
+    const made: Blob[] = [];
+    (URL as any).createObjectURL = vi.fn((blob: Blob) => {
+      made.push(blob);
+      return `blob:${made.length}`;
+    });
+    const clicked: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clicked.push(this.getAttribute("href") || "");
+    });
+    const pdf: FileItem = { key: "docs/季度.pdf", name: "季度.pdf", isDir: false, size: original.length, uploaded: "", contentType: "application/pdf" };
+    const { unmount } = render(
+      <PreviewDialog file={pdf} onClose={vi.fn()} onNotify={vi.fn()} onShare={vi.fn()} onRename={vi.fn()} onDelete={vi.fn()} />
+    );
+    await waitFor(() => expect(document.querySelector("iframe")?.getAttribute("src")).toBe("blob:2"));
+    expect(made[0]).toBe(source);
+    expect(made[1]).not.toBe(source);
+    expect(made[1].size).toBeGreaterThan(source.size);
+    fireEvent.click(screen.getAllByText(strings.download)[0]);
+    expect(clicked).toEqual(["blob:1"]);
+    expect(mockDownload).not.toHaveBeenCalled();
+    unmount();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:1");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:2");
+    click.mockRestore();
+  });
+});
+
+describe("PDF sibling switch never shows the previous blob URL (#185)", () => {
+  const pdfBody = (n: number) =>
+    "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n0 2\n0000000000 65535 f\r\n0000000009 00000 n\r\n" +
+    `trailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n47\n%%EOF\n%${"x".repeat(n)}\n`;
+
+  test("switching from a loaded PDF to the previous one: no frame pairs the new file with the old URL", async () => {
+    const a: FileItem = { key: "docs/英文 name & #hash.pdf", name: "英文 name & #hash.pdf", isDir: false, size: 200, uploaded: "", contentType: "application/pdf" };
+    const b: FileItem = { ...a, key: "docs/季度报告 (v2).pdf", name: "季度报告 (v2).pdf" };
+    let releaseB!: () => void;
+    const gateB = new Promise<void>((r) => (releaseB = r));
+    mockAuthFetch.mockImplementation(async (path: string) => {
+      const isB = path.includes(encodeURIComponent("季度报告"));
+      if (isB) await gateB;
+      return { ok: true, headers: { get: () => null }, blob: async () => new Blob([pdfBody(isB ? 2 : 1)], { type: "application/pdf" }), body: null };
+    });
+    let n = 0;
+    (URL as any).createObjectURL = vi.fn(() => `blob:u${++n}`);
+    const props = { siblings: [b, a], onSibling: vi.fn(), onClose: vi.fn(), onNotify: vi.fn(), onShare: vi.fn(), onRename: vi.fn(), onDelete: vi.fn() };
+    const { rerender } = render(<PreviewDialog file={a} {...props} />);
+    // a：u1 = 原文件（下载用），u2 = 带标题的副本（iframe 用）
+    await waitFor(() => expect(document.querySelector("iframe")?.getAttribute("src")).toBe("blob:u2"));
+    const firstFrame = document.querySelector("iframe");
+
+    const seen: Array<{ src: string | null; title: string | null }> = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        const nodes = record.type === "attributes" ? [record.target] : Array.from(record.addedNodes);
+        for (const node of nodes) {
+          const frames = node instanceof HTMLIFrameElement ? [node] : node instanceof Element ? Array.from(node.querySelectorAll("iframe")) : [];
+          frames.forEach((el) => seen.push({ src: el.getAttribute("src"), title: el.getAttribute("title") }));
+        }
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["src", "title"] });
+
+    rerender(<PreviewDialog file={b} {...props} />); // 「上一个」
+    await Promise.resolve();
+    expect(document.querySelector("iframe")).toBeNull(); // 加载中：不保留旧阅读器
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:u1");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:u2");
+
+    releaseB();
+    await waitFor(() => expect(document.querySelector("iframe")?.getAttribute("src")).toBe("blob:u4"));
+    observer.disconnect();
+    expect(document.querySelector("iframe")).not.toBe(firstFrame);
+    expect(document.querySelector("iframe")?.getAttribute("title")).toBe(b.name);
+    // 任何时刻都没有「标题是 b、地址却是 a 的旧 URL」的 iframe
+    expect(seen.filter((s) => s.title === b.name && s.src !== "blob:u4")).toEqual([]);
+  });
+});
+
+
+describe("PDF preview stays covered until the viewer settles (#190)", () => {
+  const pdfBody =
+    "%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\nxref\n0 2\n0000000000 65535 f\r\n0000000009 00000 n\r\n" +
+    "trailer\n<< /Size 2 /Root 1 0 R >>\nstartxref\n47\n%%EOF\n";
+
+  test("iframe is not mounted while withPdfTitle is still running; cover hides it until load", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    mockAuthFetch.mockImplementation(async () => {
+      await gate;
+      return {
+        ok: true,
+        headers: { get: () => null },
+        blob: async () => new Blob([pdfBody], { type: "application/pdf" }),
+        body: null,
+      };
+    });
+    let n = 0;
+    (URL as any).createObjectURL = vi.fn(() => `blob:t${++n}`);
+    const pdf: FileItem = {
+      key: "docs/a.pdf",
+      name: "a.pdf",
+      isDir: false,
+      size: 30_000_000,
+      uploaded: "",
+      contentType: "application/pdf",
+    };
+    try {
+      render(
+        <PreviewDialog
+          file={pdf}
+          onClose={vi.fn()}
+          onNotify={vi.fn()}
+          onShare={vi.fn()}
+          onRename={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      );
+      // 标题还没写完：只有转圈，没有阅读器
+      expect(document.querySelector("iframe")).toBeNull();
+      expect(screen.getAllByRole("progressbar").length).toBeGreaterThan(0);
+      release();
+      await waitFor(() => expect(document.querySelector("iframe")?.getAttribute("src")).toBe("blob:t2"));
+      const frame = document.querySelector("iframe")!;
+      // 刚挂上时仍盖着（大文件按体积会有解析缓冲）
+      expect(frame.style.visibility).toBe("hidden");
+      fireEvent.load(frame);
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(frame.style.visibility).toBe("visible");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

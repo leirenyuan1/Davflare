@@ -35,14 +35,15 @@ import {
 } from "./sitePages";
 import {
   SITE_MANIFEST_NAME,
-  deleteKeysInChunks,
   isReservedSiteName,
   isSafeManifestRel,
   loadOwnedSiteRels,
+  parseSiteManifest,
   serializeSiteManifest,
   writeEarlySiteManifest,
   type SiteManifestKind,
 } from "./siteManifest";
+import { deleteSiteKeys, putGeneratedSiteIndex } from "./siteIndex";
 
 export const SITE_PUBLISH_PLAN_PREFIX = `${INTERNAL_PREFIX}site-publish/`;
 /** 单批条目上限：客户端每批 50 个，服务端留一点余量。 */
@@ -124,6 +125,18 @@ export function isPlainFileKey(key: string): boolean {
   if (key.includes("\\") || /[\u0000-\u001f]/.test(key)) return false;
   if (key.split("/").some((part) => !part || part === "." || part === "..")) return false;
   return !isInternalKey(key);
+}
+
+/**
+ * 预清单（plan 阶段写）里能不能先记上 index.html（#169）。
+ * 生成的首页要到 put / finish 才真正写入；在那之前，站点里已有一个不属于本站清单的 index.html
+ * （例如手动上传的）时不能先记进清单——否则只做了 plan 就放弃、再用普通文件夹重新发布时，
+ * 它会被当成生成文件永久删除。真正写入首页后，finish 的正式清单会把它记上。
+ * 只认清单里记过的 index.html；未完成的旧计划里列过的不算（旧计划从没真正写过它）。
+ */
+async function earlyIndexRels(bucket: R2Bucket, prefix: string, manifestOwned: string[]): Promise<string[]> {
+  if (manifestOwned.includes("index.html")) return ["index.html"];
+  return (await bucket.head(`${prefix}index.html`)) ? [] : ["index.html"];
 }
 
 function planTargets(plan: SitePublishPlan | null): string[] {
@@ -285,7 +298,8 @@ export async function planDirPublish(
   files.sort((a, b) => a.name.localeCompare(b.name, "en", { numeric: true }));
 
   const prefix = `${SITES_PREFIX}${slug}/`;
-  const owned = new Set(await loadOwnedSiteRels(bucket, prefix));
+  const manifestOwned = await loadOwnedSiteRels(bucket, prefix);
+  const owned = new Set(manifestOwned);
   const stale = await loadPlan(bucket, slug);
   if (stale && stale.slug === slug) for (const rel of planTargets(stale)) owned.add(rel);
   const blocked = new Set<string>();
@@ -319,7 +333,11 @@ export async function planDirPublish(
   };
   await savePlan(bucket, plan);
   // 先写预清单把站点标成 dir，再开始复制（#146）；finish 会用正式清单覆盖它
-  await writeEarlySiteManifest(bucket, prefix, "dir", [...owned, ...planTargets(plan), "index.html"]);
+  await writeEarlySiteManifest(bucket, prefix, "dir", [
+    ...[...owned].filter((rel) => rel !== "index.html"),
+    ...planTargets(plan),
+    ...(await earlyIndexRels(bucket, prefix, manifestOwned)),
+  ]);
   return jsonResponse({
     slug,
     kind: "dir",
@@ -434,7 +452,8 @@ async function commitSiteManifest(
   const stale = plan.owned
     .filter((rel) => isSafeManifestRel(rel) && !keep.has(rel))
     .map((rel) => `${prefix}${rel}`);
-  await deleteKeysInChunks(bucket, stale);
+  // 首页走回收站兜底（#177）：清单里记着、实际却是用户文件的 index.html 不会被硬删
+  await deleteSiteKeys(bucket, prefix, stale);
   await bucket.delete(sitePublishPlanKey(plan.slug));
 }
 
@@ -465,9 +484,8 @@ export async function finishSitePublish(
         uploaded: item.uploaded,
       })),
     });
-    await bucket.put(`${prefix}index.html`, html, {
-      httpMetadata: { contentType: "text/html; charset=utf-8" },
-    });
+    // 覆盖前把用户的首页移进回收站（#177）
+    await putGeneratedSiteIndex(bucket, prefix, html);
     await commitSiteManifest(bucket, plan, [...plan.items.map((item) => item.to), "index.html"]);
   } else {
     await commitSiteManifest(bucket, plan, [...pages, ...plan.items.map((item) => item.to)]);
@@ -533,10 +551,20 @@ export async function planDocsPublish(
   ) {
     return textResponse("bad sources", 400);
   }
-  const scope = docsScopeOf(body.sources as string[]);
   if (pageNames.length + imageKeys.length > DOCS_MAX_FILES) {
     return textResponse(`file limit exceeded: ${pageNames.length + imageKeys.length} > ${DOCS_MAX_FILES}`, 400);
   }
+  // 范围由笔记源 key 推出，所以这些 key 必须真的是网盘里的笔记：编一个不存在的 .md 路径
+  // （例如放到更上层）就能把范围撑大，进而公开范围外的图片（#158）。逐个 head 确认存在且不是目录。
+  const sources = body.sources as string[];
+  if (new Set(sources).size !== sources.length) return textResponse("duplicate sources", 400);
+  for (const key of sources) {
+    const object = await bucket.head(key);
+    if (!object || isCollectionObject(object)) {
+      return textResponse(`source missing: ${key.split("/").pop()}`, 409);
+    }
+  }
+  const scope = docsScopeOf(sources);
   for (const name of pageNames) {
     if (!isDocsPageName(sanitizeSiteName(name))) return textResponse("bad page name", 400);
   }
@@ -560,7 +588,8 @@ export async function planDocsPublish(
   const verdict = checkDocsLimits(pageNames.length, imageItems.length, imageBytes);
   if (!verdict.ok) return textResponse(verdict.error, 400);
 
-  const owned = new Set(await loadOwnedSiteRels(bucket, targetPrefix));
+  const manifestOwned = await loadOwnedSiteRels(bucket, targetPrefix);
+  const owned = new Set(manifestOwned);
   const stale = await loadPlan(bucket, slug);
   if (stale && stale.slug === slug) for (const rel of planTargets(stale)) owned.add(rel);
 
@@ -607,7 +636,12 @@ export async function planDocsPublish(
   };
   await savePlan(bucket, plan);
   // 与公开目录一样，复制图片 / 上传页面之前先写预清单（#146 跟进）
-  await writeEarlySiteManifest(bucket, targetPrefix, "docs", [...owned, ...planTargets(plan)]);
+  const earlyIndex = await earlyIndexRels(bucket, targetPrefix, manifestOwned);
+  await writeEarlySiteManifest(bucket, targetPrefix, "docs", [
+    ...[...owned].filter((rel) => rel !== "index.html"),
+    ...planTargets(plan).filter((rel) => rel !== "index.html"),
+    ...earlyIndex,
+  ]);
   return jsonResponse({
     slug,
     kind: "docs",
@@ -619,6 +653,14 @@ export async function planDocsPublish(
     batchMax: SITE_PUBLISH_BATCH_MAX,
     pageMaxBytes: DOCS_PAGE_MAX_BYTES,
   });
+}
+
+/** 文档站预清单里补记一个已写入的生成文件（已记过则不写） */
+async function ensureEarlyManifestLists(bucket: R2Bucket, prefix: string, rel: string): Promise<void> {
+  const existing = await bucket.get(`${prefix}${SITE_MANIFEST_NAME}`);
+  const files = existing ? parseSiteManifest(await existing.text()).files : [];
+  if (files.includes(rel)) return;
+  await writeEarlySiteManifest(bucket, prefix, "docs", [...files, rel]);
 }
 
 export async function putDocsPages(
@@ -653,6 +695,13 @@ export async function putDocsPages(
   if (doneBytes > DOCS_MAX_BYTES) return textResponse(`size limit exceeded: >${DOCS_MAX_BYTES}`, 400);
   const prefix = `${SITES_PREFIX}${slug}/`;
   for (const page of batch) {
+    if (page.name === "index.html") {
+      // 生成的首页（#177）：覆盖前把用户的首页移进回收站；写入后补记进预清单——
+      // #172 起预清单在已有首页时不先记 index.html，不补记的话放弃发布后它会残留成站点首页
+      await putGeneratedSiteIndex(bucket, prefix, page.html);
+      await ensureEarlyManifestLists(bucket, prefix, "index.html");
+      continue;
+    }
     await bucket.put(`${prefix}${page.name}`, page.html, {
       httpMetadata: { contentType: "text/html; charset=utf-8" },
     });

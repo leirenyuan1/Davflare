@@ -36,6 +36,7 @@ import {
   tokensToLines,
 } from "./app/highlight";
 import { NotifyFn } from "./app/notify";
+import { withPdfTitle } from "./app/pdfTitle";
 import {
   fileExtension,
   fileIconKind,
@@ -204,8 +205,21 @@ function PreviewDialog({
   onSaved?: () => void;
 }) {
   const isPhone = useMediaQuery("(max-width:600px)");
-  const [url, setUrl] = useState<string | null>(null);
+  // 预览用的 object URL 和它属于哪个文件绑在一起（#185）：切换文件的那一帧里，
+  // 新文件绝不会拿到上一个文件（已回收）的 URL。
+  // PDF 预览用的是补了 Title 的副本（#149 附带问题）；originalUrl 是原文件，下载用它
+  const [loaded, setLoaded] = useState<{
+    key: string;
+    url: string;
+    originalUrl: string | null;
+  } | null>(null);
+  const url = loaded && file && loaded.key === file.key ? loaded.url : null;
   const [loading, setLoading] = useState(false);
+  // #190：带 Title 的 blob 就绪后，Chrome 阅读器仍可能先用 blob UUID 填工具栏再去解析 Title。
+  // 大文件刚拆掉时这段空窗约 1 秒。iframe 先盖住，等 load + 按体积估算的解析缓冲后再揭开。
+  const [pdfCovered, setPdfCovered] = useState(false);
+  const prevPdfBytesRef = useRef(0);
+  const pdfRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -249,7 +263,12 @@ function PreviewDialog({
 
   useEffect(() => {
     if (!file) {
-      setUrl(null);
+      setLoaded(null);
+      setPdfCovered(false);
+      if (pdfRevealTimerRef.current) {
+        clearTimeout(pdfRevealTimerRef.current);
+        pdfRevealTimerRef.current = null;
+      }
       setText(null);
       setZoom(1);
       setOffset({ x: 0, y: 0 });
@@ -266,10 +285,16 @@ function PreviewDialog({
       return;
     }
     let objectUrl: string | null = null;
+    let originalObjectUrl: string | null = null;
     let canceled = false;
     const controller = new AbortController();
     setLoading(true);
-    setUrl(null);
+    setLoaded(null);
+    setPdfCovered(false);
+    if (pdfRevealTimerRef.current) {
+      clearTimeout(pdfRevealTimerRef.current);
+      pdfRevealTimerRef.current = null;
+    }
     setText(null);
     setTooLarge(false);
     setLargeSize(0);
@@ -320,8 +345,19 @@ function PreviewDialog({
         }
         const blob = await response.blob();
         if (canceled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
+        if (mimeType(file.contentType) === "application/pdf") {
+          // 内置阅读器的标题栏默认显示 blob URL 里的 UUID；给预览副本写上文件名作为文档标题
+          const titled = await withPdfTitle(blob, file.name);
+          if (canceled) return;
+          if (titled !== blob) originalObjectUrl = URL.createObjectURL(blob);
+          objectUrl = URL.createObjectURL(titled);
+          // 先盖住阅读器，等 onLoad + 解析缓冲再揭开（#190）
+          setPdfCovered(true);
+        } else {
+          objectUrl = URL.createObjectURL(blob);
+          setPdfCovered(false);
+        }
+        setLoaded({ key: file.key, url: objectUrl, originalUrl: originalObjectUrl });
       } catch (error) {
         if (canceled || (error as Error).name === "AbortError") return;
         onNotify(errorMessage(error), "error");
@@ -333,7 +369,12 @@ function PreviewDialog({
     return () => {
       canceled = true;
       controller.abort();
+      if (pdfRevealTimerRef.current) {
+        clearTimeout(pdfRevealTimerRef.current);
+        pdfRevealTimerRef.current = null;
+      }
       if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (originalObjectUrl) URL.revokeObjectURL(originalObjectUrl);
     };
   }, [file]);
 
@@ -376,7 +417,7 @@ function PreviewDialog({
       }
       if (url) {
         const a = document.createElement("a");
-        a.href = url;
+        a.href = loaded?.originalUrl ?? url;
         a.download = file.name;
         document.body.appendChild(a);
         a.click();
@@ -811,11 +852,53 @@ function PreviewDialog({
           ) : isAudio ? (
             <audio src={url} controls style={{ width: "100%" }} />
           ) : isPdf ? (
-            <iframe
-              src={url}
-              title={file?.name}
-              style={{ width: "100%", height: "100%", border: "none" }}
-            />
+            <Box sx={{ position: "relative", width: "100%", height: "100%", flex: 1, minHeight: 0 }}>
+              {pdfCovered && (
+                <Box
+                  sx={{
+                    position: "absolute",
+                    inset: 0,
+                    zIndex: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    bgcolor: "background.paper",
+                  }}
+                >
+                  <CircularProgress />
+                </Box>
+              )}
+              <iframe
+                // 每份文档一个新的 iframe，不在同一个 iframe 里从旧 blob 跳到新 blob
+                key={url}
+                src={url}
+                title={file?.name}
+                onLoad={() => {
+                  if (pdfRevealTimerRef.current) clearTimeout(pdfRevealTimerRef.current);
+                  const nextBytes = file?.size || 0;
+                  // 大文件拆掉后阅读器进程还在消化时，小文件也会先闪 UUID；按「上一份/这一份」体积估缓冲
+                  const settleMs = Math.min(
+                    1500,
+                    Math.ceil(Math.max(prevPdfBytesRef.current, nextBytes) / 25_000)
+                  );
+                  prevPdfBytesRef.current = nextBytes;
+                  if (settleMs <= 0) {
+                    setPdfCovered(false);
+                    return;
+                  }
+                  pdfRevealTimerRef.current = setTimeout(() => {
+                    pdfRevealTimerRef.current = null;
+                    setPdfCovered(false);
+                  }, settleMs);
+                }}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  border: "none",
+                  visibility: pdfCovered ? "hidden" : "visible",
+                }}
+              />
+            </Box>
           ) : (
             <Typography>{strings.unsupportedPreview}</Typography>
           )
