@@ -9,9 +9,24 @@ import {
   DIR_MAX_FILES,
   DOCS_MAX_BYTES,
   DOCS_MAX_FILES,
+  BOOKSHELF_MAX_BYTES,
+  BOOKSHELF_MAX_FILES,
+  DOWNLOADS_MAX_BYTES,
+  DOWNLOADS_MAX_FILES,
+  PODCAST_FEED_NAME,
+  PODCAST_MAX_BYTES,
+  PODCAST_MAX_EPISODES,
   checkAlbumLimits,
+  checkBookshelfLimits,
   checkDirLimits,
+  checkDownloadsLimits,
+  checkPodcastLimits,
+  isBookshelfAssetName,
+  isDownloadsAssetName,
+  isDownloadsReadmeName,
+  isMediaFileName,
   isRasterFileName,
+  podcastPublicBase,
 } from "../../functions/sitePages";
 import {
   DocsLookupIO,
@@ -36,10 +51,21 @@ import { encodeKey, humanReadableSize } from "./utils";
 export {
   ALBUM_MAX_BYTES,
   ALBUM_MAX_IMAGES,
+  BOOKSHELF_MAX_BYTES,
+  BOOKSHELF_MAX_FILES,
   DIR_MAX_BYTES,
   DIR_MAX_FILES,
   DOCS_MAX_BYTES,
   DOCS_MAX_FILES,
+  DOWNLOADS_MAX_BYTES,
+  DOWNLOADS_MAX_FILES,
+  PODCAST_FEED_NAME,
+  PODCAST_MAX_BYTES,
+  PODCAST_MAX_EPISODES,
+  isBookshelfAssetName,
+  isDownloadsAssetName,
+  isDownloadsReadmeName,
+  isMediaFileName,
   isRasterFileName,
 };
 
@@ -122,7 +148,7 @@ export async function deleteSite(slug: string, options?: { purge?: boolean }): P
 }
 
 /** 发布时这次属于哪种站点：普通文件夹复制 / 相册 / 公开目录 / 文档站 */
-export type SitePublishKind = "static" | "album" | "dir" | "docs";
+export type SitePublishKind = "static" | "album" | "dir" | "docs" | "podcast" | "downloads" | "bookshelf";
 
 export interface SiteSlugCheck {
   slug: string;
@@ -145,6 +171,9 @@ function siteKindLabel(kind: string | null): string {
   if (kind === "album") return translate("siteKindAlbum");
   if (kind === "dir") return translate("siteKindDir");
   if (kind === "docs") return translate("siteKindDocs");
+  if (kind === "podcast") return translate("siteKindPodcast");
+  if (kind === "downloads") return translate("siteKindDownloads");
+  if (kind === "bookshelf") return translate("siteKindBookshelf");
   return translate("siteKindUnknown");
 }
 
@@ -164,7 +193,7 @@ export function siteSlugConflictMessage(
   if (check.kind !== kind) {
     return translate("siteSlugTakenKind", { slug: check.slug, kind: siteKindLabel(check.kind) });
   }
-  if (kind === "album" || kind === "docs") return null;
+  if (kind === "album" || kind === "docs" || kind === "podcast" || kind === "downloads" || kind === "bookshelf") return null;
   if (check.source && source && check.source === source) return null;
   if (check.source && source && check.source !== source) {
     return translate("siteSlugTakenSource", { slug: check.slug, source: check.source });
@@ -234,7 +263,7 @@ export async function publishSite(
 
 export interface PublishGeneratedResult {
   slug: string;
-  kind: "nav" | "album" | "dir" | "docs";
+  kind: "nav" | "album" | "dir" | "docs" | "podcast" | "downloads" | "bookshelf";
   copied: number;
   sitesHost: string | null;
   count?: number;
@@ -321,6 +350,204 @@ export async function publishAlbumSite(
   });
   if (!response.ok) {
     const text = (await response.text()) || translate("publishAlbumFailed");
+    throw new Error(text);
+  }
+  return response.json();
+}
+export function partitionMediaFiles(items: FileItem[]): { media: FileItem[]; ignored: number } {
+  const media = items.filter((item) => !item.isDir && isMediaFileName(item.name));
+  return { media, ignored: items.length - media.length };
+}
+
+export function podcastPublishBlockReason(media: FileItem[]): string | null {
+  const bytes = albumSelectionBytes(media);
+  const verdict = checkPodcastLimits(media.length, bytes);
+  if (verdict.ok) return null;
+  if (verdict.error === "no podcast media") return translate("publishPodcastNoMedia");
+  if (verdict.error.startsWith("podcast episode limit exceeded")) {
+    return translate("publishPodcastTooMany", { count: media.length, max: PODCAST_MAX_EPISODES });
+  }
+  if (verdict.error.startsWith("podcast size limit exceeded")) {
+    return translate("publishPodcastTooLarge", {
+      size: humanReadableSize(bytes),
+      max: humanReadableSize(PODCAST_MAX_BYTES),
+    });
+  }
+  return translate("publishPodcastFailed");
+}
+
+export interface PublishPodcastResult extends PublishGeneratedResult {
+  feed?: string;
+}
+
+/** 把选中的音视频复制进 sites/{slug}/，生成 feed.xml + 播放页。 */
+export async function publishPodcastSite(
+  slug: string,
+  files: string[],
+  options?: { lang?: Lang; title?: string; description?: string }
+): Promise<PublishPodcastResult> {
+  const normalizedSlug = slug.trim().toLowerCase();
+  if (!isValidSiteSlug(normalizedSlug)) {
+    throw new Error(translate("publishSiteBadSlug"));
+  }
+  const response = await authFetch("/api/sites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      slug: normalizedSlug,
+      podcast: {
+        lang: options?.lang,
+        title: options?.title,
+        description: options?.description,
+        files,
+      },
+    }),
+  });
+  if (!response.ok) {
+    const text = (await response.text()) || translate("publishPodcastFailed");
+    throw new Error(text);
+  }
+  return response.json();
+}
+
+/** 播客 RSS 地址：https://<SITES_HOST>/{slug}/feed.xml */
+export function podcastFeedUrl(sitesHost: string | null, slug: string): string | null {
+  const base = podcastPublicBase(sitesHost, slug);
+  return base ? `${base}/${PODCAST_FEED_NAME}` : null;
+}
+
+export function partitionDownloadsFiles(items: FileItem[]): {
+  assets: FileItem[];
+  readme: FileItem | null;
+  ignored: number;
+} {
+  const assets: FileItem[] = [];
+  let readme: FileItem | null = null;
+  let ignored = 0;
+  for (const item of items) {
+    if (item.isDir) {
+      ignored += 1;
+      continue;
+    }
+    if (isDownloadsReadmeName(item.name)) {
+      if (!readme) readme = item;
+      else ignored += 1;
+      continue;
+    }
+    if (isDownloadsAssetName(item.name)) assets.push(item);
+    else ignored += 1;
+  }
+  return { assets, readme, ignored };
+}
+
+export function downloadsPublishBlockReason(assets: FileItem[]): string | null {
+  const bytes = albumSelectionBytes(assets);
+  const verdict = checkDownloadsLimits(assets.length, bytes);
+  if (verdict.ok) return null;
+  if (verdict.error === "no downloads assets") return translate("publishDownloadsNoAssets");
+  if (verdict.error.startsWith("downloads file limit exceeded")) {
+    return translate("publishDownloadsTooMany", { count: assets.length, max: DOWNLOADS_MAX_FILES });
+  }
+  if (verdict.error.startsWith("downloads size limit exceeded")) {
+    return translate("publishDownloadsTooLarge", {
+      size: humanReadableSize(bytes),
+      max: humanReadableSize(DOWNLOADS_MAX_BYTES),
+    });
+  }
+  return translate("publishDownloadsFailed");
+}
+
+/** 把选中安装包复制进 sites/{slug}/，生成带 SHA-256 的下载页；可选 README.md。 */
+export async function publishDownloadsSite(
+  slug: string,
+  files: string[],
+  options?: { lang?: Lang; title?: string; readmeKey?: string | null }
+): Promise<PublishGeneratedResult> {
+  const normalizedSlug = slug.trim().toLowerCase();
+  if (!isValidSiteSlug(normalizedSlug)) {
+    throw new Error(translate("publishSiteBadSlug"));
+  }
+  const response = await authFetch("/api/sites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      slug: normalizedSlug,
+      downloads: {
+        lang: options?.lang,
+        title: options?.title,
+        files,
+        readmeKey: options?.readmeKey || undefined,
+      },
+    }),
+  });
+  if (!response.ok) {
+    const text = (await response.text()) || translate("publishDownloadsFailed");
+    throw new Error(text);
+  }
+  return response.json();
+}
+
+
+
+
+export function partitionBookshelfFiles(items: FileItem[]): {
+  assets: FileItem[];
+  ignored: number;
+} {
+  const assets: FileItem[] = [];
+  let ignored = 0;
+  for (const item of items) {
+    if (item.isDir) {
+      ignored += 1;
+      continue;
+    }
+    if (isBookshelfAssetName(item.name)) assets.push(item);
+    else ignored += 1;
+  }
+  return { assets, ignored };
+}
+
+export function bookshelfPublishBlockReason(assets: FileItem[]): string | null {
+  const bytes = albumSelectionBytes(assets);
+  const verdict = checkBookshelfLimits(assets.length, bytes);
+  if (verdict.ok) return null;
+  if (verdict.error === "no bookshelf assets") return translate("publishBookshelfNoAssets");
+  if (verdict.error.startsWith("bookshelf file limit exceeded")) {
+    return translate("publishBookshelfTooMany", { count: assets.length, max: BOOKSHELF_MAX_FILES });
+  }
+  if (verdict.error.startsWith("bookshelf size limit exceeded")) {
+    return translate("publishBookshelfTooLarge", {
+      size: humanReadableSize(bytes),
+      max: humanReadableSize(BOOKSHELF_MAX_BYTES),
+    });
+  }
+  return translate("publishBookshelfFailed");
+}
+
+/** 把选中 PDF/EPUB 复制进 sites/{slug}/，生成书架页；有缩略图时复制为封面。 */
+export async function publishBookshelfSite(
+  slug: string,
+  files: string[],
+  options?: { lang?: Lang; title?: string }
+): Promise<PublishGeneratedResult> {
+  const normalizedSlug = slug.trim().toLowerCase();
+  if (!isValidSiteSlug(normalizedSlug)) {
+    throw new Error(translate("publishSiteBadSlug"));
+  }
+  const response = await authFetch("/api/sites", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      slug: normalizedSlug,
+      bookshelf: {
+        lang: options?.lang,
+        title: options?.title,
+        files,
+      },
+    }),
+  });
+  if (!response.ok) {
+    const text = (await response.text()) || translate("publishBookshelfFailed");
     throw new Error(text);
   }
   return response.json();

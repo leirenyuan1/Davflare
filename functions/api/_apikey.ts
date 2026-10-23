@@ -53,6 +53,13 @@ export async function sha256Hex(value: string) {
     .join("");
 }
 
+export async function sha256Bytes(data: ArrayBuffer): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export function timingSafeEqual(a: string, b: string) {
   if (a.length !== b.length) return false;
   let diff = 0;
@@ -442,7 +449,7 @@ export async function copyObject(
   bucket: R2Bucket,
   from: string,
   to: string,
-  options?: { overwrite?: boolean }
+  options?: { overwrite?: boolean; httpMetadata?: R2HTTPMetadata }
 ): Promise<Response | null> {
   if (!options?.overwrite) {
     const dest = await bucket.head(to);
@@ -456,7 +463,7 @@ export async function copyObject(
     return textResponse("只能操作文件，不能操作目录", 400);
   }
   await bucket.put(to, source.body, {
-    httpMetadata: source.httpMetadata,
+    httpMetadata: options?.httpMetadata ?? source.httpMetadata,
     customMetadata: source.customMetadata,
   });
   return null;

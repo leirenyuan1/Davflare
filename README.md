@@ -4,6 +4,8 @@
 
 [![Deploy to Cloudflare Pages](https://img.shields.io/badge/Deploy%20to%20Cloudflare-Pages-F38020?logo=cloudflare&logoColor=white)](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create) · [Deploy guide](docs/deploy.md)
 
+[![WebDAV litmus](https://img.shields.io/github/actions/workflow/status/fanchenggang/Davflare/ci.yml?branch=main&label=WebDAV%20litmus)](https://github.com/fanchenggang/Davflare/actions/workflows/ci.yml)
+
 Cloudflare R2 file manager on **Cloudflare Pages** (API via Pages Functions) — free 10 GB storage and 100,000 invocations per day. [R2 pricing](https://developers.cloudflare.com/r2/platform/pricing/)
 
 > **Pages, not Workers.** This repo sets `pages_build_output_dir` in `wrangler.toml` and has no Worker `main`. Do **not** use the [Workers Deploy to Cloudflare](https://deploy.workers.cloudflare.com/) button or `wrangler deploy` — that looks for a Worker entry point and fails with «entry point not configured».
@@ -29,7 +31,13 @@ Share (expiry + extract code):
 ## Features
 
 - Chunked web uploads, folders, search, drag-and-drop, image/video/PDF thumbnails
-- Share links with expiry or forever, extract code, folder zip, and a zero-JS landing page
+- Share links with expiry or forever, extract code, folder zip; zero-JS preview for media/PDF, monospace preview + copy for `text/plain`
+- **Quick paste**: toolbar paste → `.txt` + existing shares (expiry / extract code) — a self-hosted Pastebin
+- **Paste screenshot → CDN**: Ctrl/Cmd+V in the file manager, Image host page, or Settings — uploads via `POST /api/images`, toast copies `https://<SITES_HOST>/i/{id}`
+- **PDF library / bookshelf**: publish a PDF/EPUB folder to `sites/{slug}/` with open/download + optional covers
+- **Podcast / RSS**: publish an audio/video folder to `sites/{slug}/` with `feed.xml` + a simple player page — subscribe in any podcast app
+- **Download page / Releases on R2**: publish an installer/zip folder to `sites/{slug}/` with name, size, SHA-256 (optional README notes)
+- **Scheduled backup**: Settings card copies safe `davflare sync` crontab lines; examples + GitHub Actions
 - Recycle bin with configurable retention (`TRASH_RETENTION_DAYS`)
 - WebDAV Class 1/2 at `/webdav` (toggleable without affecting the web UI)
 - API keys for scripted upload / download / sync, plus remote MCP at `/mcp` (25 tools)
@@ -69,17 +77,110 @@ Tested (local `wrangler pages dev` plus the same `webdav` client the plugin uses
 
 Limits: each file must be under 100MB (Cloudflare's request body limit). Requests over 100MB are stopped by Cloudflare with its generic 413 page, so set Remotely Save's **Skip Large Files** threshold below 100MB. Remotely Save syncs a rename as "delete old file + upload new file".
 
+
+## Connect Claude / Cursor MCP in 2 minutes
+
+Point Cursor or Claude Desktop at the same-origin `POST /mcp` with an API key. No new APIs.
+
+1. Deploy Davflare, open `#/settings`, leave **API Key** and **MCP** on, create a key.
+2. On the **Connect Claude / Cursor MCP** card, copy or download:
+   - **Cursor** → `mcp.json` (`url` + `Authorization: Bearer ${env:DAVFLARE_API_KEY}`)
+   - **Claude Desktop** → `claude_desktop_config.json` (`mcp-remote` bridge; set `DAVFLARE_API_KEY` in the environment before launch)
+3. Restart the client and ask it to call `tools/list`.
+
+Details and samples: [docs/agents.md#2-minutes-connect-davflare-to-an-ai-assistant](docs/agents.md#2-minutes-connect-davflare-to-an-ai-assistant) · [`agents/examples/mcp-export/`](agents/examples/mcp-export/).
+
+## 10-minute self-hosted Pastebin (Quick paste)
+
+In the web UI, open **Quick paste** from the toolbar (or the mobile Create menu): paste text → pick expiry and an optional extract code → get a share link. Davflare writes a `.txt` in the current folder and reuses `POST /api/shares` — **no new API**.
+
+The landing page shows a monospace preview with one-click copy, plus `.txt` download. Extract codes work like any other share. Handy for code snippets, logs, or notes when people search for a private Pastebin on Cloudflare R2.
+
+From scripts: `PUT /webdav/.../note.txt` then `POST /api/shares`; `Content-Type: text/plain` shares get the paste landing automatically.
+
+
+## Free R2 backup in 10 minutes (scheduled sync)
+
+Use existing `davflare-cli` sync — no new APIs.
+
+1. `npm i -g davflare-cli` then `davflare login --server https://<your-host>` (or set secrets `DAVFLARE_SERVER` / `DAVFLARE_KEY` in CI).
+2. Open `#/settings` → **Scheduled backup** → copy a **push** or **pull** crontab line (keys stay in `~/.config/davflare`, never in the line).
+3. `crontab -e` and paste; or copy [`agents/examples/backup-cron/github-actions-backup.yml`](agents/examples/backup-cron/github-actions-backup.yml) into your repo workflows.
+
+Samples: [`agents/examples/backup-cron/`](agents/examples/backup-cron/). Sync semantics: [cli/README.md](cli/README.md).
+
+
+## Software download page in 10 minutes (“Releases on R2”)
+
+Select a folder of installers / zips → **Publish as download page**. Davflare copies files into `sites/{slug}/`, writes a page with **filename, size, SHA-256**, and optionally renders a sibling `README.md` as release notes. Copy `https://<SITES_HOST>/{slug}/`. Reuses the existing static-site publish flow — **no new API**.
+
+1. Deploy with `SITES_HOST`, leave **Sites** on.
+2. In the file manager, open a folder of `.zip` / `.exe` / `.dmg` / … (or select the folder) → **Publish as download page**.
+3. Copy `https://<SITES_HOST>/{slug}/` and share it.
+
+Distinct from public directory, album, docs, podcast RSS, and nav site. Sample: [`agents/examples/folder-downloads/`](agents/examples/folder-downloads/).
+
+## PDF library / ebook bookshelf in 10 minutes
+
+Select a folder of PDFs (optional EPUBs) → **Publish as PDF library**. Davflare copies files into `sites/{slug}/`, builds a bookshelf page with **filename, size, open-in-browser / download**; existing thumbnails become covers. Copy `https://<SITES_HOST>/{slug}/`. Reuses the existing static-site publish flow — **no new API**.
+
+1. Deploy with `SITES_HOST` and keep **Sites** enabled.
+2. In the file manager, open a folder of `.pdf` / `.epub` (or select the folder) → **Publish as PDF library**.
+3. Copy `https://<SITES_HOST>/{slug}/` and share it.
+
+Distinct from download page, docs site, album, podcast RSS, public directory, and nav site. Sample: [`agents/examples/folder-bookshelf/`](agents/examples/folder-bookshelf/).
+
+## Podcast RSS in 10 minutes
+
+Select a folder of audio/video files → **Publish as podcast / RSS**. Davflare copies media into `sites/{slug}/`, writes **RSS 2.0** `feed.xml` (enclosures on `SITES_HOST`), and a simple list player page. Reuses the existing static-site publish flow — **no new API**.
+
+1. Deploy with `SITES_HOST`, leave **Sites** on.
+2. In the file manager, open a folder of `.mp3` / `.m4a` / `.mp4` / … (or select the folder) → **Publish as podcast / RSS**.
+3. Copy `https://<SITES_HOST>/{slug}/feed.xml` into Apple Podcasts / AntennaPod / Overcast / …
+
+Distinct from album, docs site, public directory, and nav site. Sample: [`agents/examples/podcast-rss/`](agents/examples/podcast-rss/).
+
+## Phone upload in 30 seconds (iOS Shortcuts / Android)
+
+From the Share Sheet, drop a photo or file into free R2. Open `#/settings` → **Phone upload (iOS Shortcuts / Android)**: copy the filled-in upload URL / auth headers, build one iOS Shortcut (or paste curl into Android HTTP Shortcuts). Reuses existing `POST /api/upload` (drive folder) and `POST /api/images` (public CDN) — **no new API / MCP**.
+
+Distinct from WebDAV mount, PicGo/ShareX, paste-screenshot image host, and file-request collect links.
+
+Sample: [`agents/examples/mobile-upload/`](agents/examples/mobile-upload/).
+
+## Paste a screenshot, get a CDN link in two seconds
+
+In the **file manager**, **`#/images`**, or **`#/settings`** (Image host clients card), press **Ctrl/Cmd+V** with a screenshot on the clipboard. Davflare uploads via existing `POST /api/images` — **no new API** — then toasts a one-click copy of `https://<SITES_HOST>/i/{id}`. In the file manager the same paste also queues the file into the current folder.
+
+Text Quick paste stays on the toolbar button (clipboard text → share). Image paste never opens the text Paste dialog.
+
+Sample notes: [`agents/examples/paste-image-host/`](agents/examples/paste-image-host/).
+
+## Markdown image host in 10 minutes
+
+Turn your R2 bucket into a private Markdown image host (PicGo / ShareX / Typora). Reuses `POST /api/images` — **no new APIs**.
+
+1. Deploy with `SITES_HOST`, leave **API Key** and **Image host** on, create a key (`fd_…`).
+2. Open `#/settings` → **Image host clients**:
+   - **ShareX** — download `.sxcu`, replace `YOUR_API_KEY`, import.
+   - **Typora** — copy the one-line Custom Command curl (replace the key; `$1` is the file).
+   - **PicGo / PicList** — install [`picgo-plugin-davflare`](picgo-plugin-davflare/) (local folder, or `picgo install picgo-plugin-davflare` after the owner publishes to npm).
+3. Upload a test image (or **Ctrl/Cmd+V** a screenshot in the file manager / `#/images` / Settings); public URL is `https://<SITES_HOST>/i/{id}`.
+
+Details: [docs/sites.md#markdown-image-host-in-10-minutes](docs/sites.md#markdown-image-host-in-10-minutes) · [`agents/examples/image-host-export/`](agents/examples/image-host-export/) · [`picgo-plugin-davflare/`](picgo-plugin-davflare/).
+
+
 ## Documentation
 
 | Topic | Link |
 | --- | --- |
 | Deploy, env vars, feature switches, post-deploy `#/setup` checklist; MCP playground `#/mcp` | [docs/deploy.md](docs/deploy.md) · [docs/API.md](docs/API.md) |
-| WebDAV clients & limits | [docs/webdav.md](docs/webdav.md) |
+| WebDAV clients & limits; **compatibility matrix + litmus** | [docs/webdav.md](docs/webdav.md) · [docs/webdav-clients.md](docs/webdav-clients.md) |
 | Open API & MCP (incl. chat share / zip folder examples) | [docs/API.md](docs/API.md) |
-| Static sites & image host | [docs/sites.md](docs/sites.md) |
+| Static sites & image host; **podcast RSS / download page / paste screenshot / PicGo / phone upload** | [docs/sites.md](docs/sites.md) · [agents/examples/podcast-rss/](agents/examples/podcast-rss/) · [agents/examples/folder-downloads/](agents/examples/folder-downloads/) · [agents/examples/folder-bookshelf/](agents/examples/folder-bookshelf/) · [agents/examples/paste-image-host/](agents/examples/paste-image-host/) · [picgo-plugin-davflare/](picgo-plugin-davflare/) · [agents/examples/image-host-export/](agents/examples/image-host-export/) · [agents/examples/mobile-upload/](agents/examples/mobile-upload/) |
 | GitHub Action — deploy a build dir to a site (`uses: fanchenggang/Davflare@main`) | [docs/sites.md#github-action-deploy-to-davflare-site](docs/sites.md#github-action-deploy-to-davflare-site) |
-| Agent layouts (`pull` / `push`) | [docs/agents.md](docs/agents.md) |
-| CLI (`davflare-cli`) | [cli/README.md](cli/README.md) |
+| Agent layouts (`pull` / `push`); MCP one-click export (Cursor / Claude Desktop) | [docs/agents.md](docs/agents.md) · [agents/examples/mcp-export/](agents/examples/mcp-export/) |
+| CLI (`davflare-cli`); scheduled backup (crontab + Actions) | [cli/README.md](cli/README.md) · [agents/examples/backup-cron/](agents/examples/backup-cron/) |
 | Chrome extension (install + bookmarks) | [extension/README.md](extension/README.md) |
 | Bookmark portability | [docs/bookmarks-portability.md](docs/bookmarks-portability.md) |
 | Testing | [TESTING.md](TESTING.md) · [TEST_CASES.md](TEST_CASES.md) |
@@ -93,3 +194,4 @@ Limits: each file must be under 100MB (Cloudflare's request body limit). Request
 ## License
 
 [MIT](./LICENSE)
+

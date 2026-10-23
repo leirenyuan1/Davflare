@@ -17,6 +17,9 @@ import {
   PhotoLibrary as AlbumIcon,
   FolderShared as PublishDirIcon,
   MenuBook as PublishDocsIcon,
+  Podcasts as PublishPodcastIcon,
+  Inventory2 as PublishDownloadsIcon,
+  AutoStories as PublishBookshelfIcon,
 } from "@mui/icons-material";
 
 function ActionButton({
@@ -64,6 +67,12 @@ function MultiSelectToolbar({
   canPublishDocs = false,
   onPublishAlbum,
   canPublishAlbum = false,
+  onPublishPodcast,
+  canPublishPodcast = false,
+  onPublishDownloads,
+  canPublishDownloads = false,
+  onPublishBookshelf,
+  canPublishBookshelf = false,
 }: {
   selectedKeys: string[];
   onClose: () => void;
@@ -84,6 +93,15 @@ function MultiSelectToolbar({
   canPublishDocs?: boolean;
   onPublishAlbum?: () => void;
   canPublishAlbum?: boolean;
+  /** 发布为播客：单选文件夹且当前层有音视频时可用。 */
+  onPublishPodcast?: () => void;
+  canPublishPodcast?: boolean;
+  /** 发布为软件下载页：单选文件夹。 */
+  onPublishDownloads?: () => void;
+  canPublishDownloads?: boolean;
+  /** 发布为 PDF 资料库：单选文件夹。 */
+  onPublishBookshelf?: () => void;
+  canPublishBookshelf?: boolean;
 }) {
   const count = selectedKeys.length;
 
@@ -180,6 +198,30 @@ function MultiSelectToolbar({
             label={strings.publishAsAlbum}
             disabled={!canPublishAlbum}
             onClick={onPublishAlbum}
+          />
+        ) : null}
+        {onPublishPodcast ? (
+          <ActionButton
+            icon={<PublishPodcastIcon />}
+            label={strings.publishAsPodcast}
+            disabled={!canPublishPodcast}
+            onClick={onPublishPodcast}
+          />
+        ) : null}
+        {onPublishDownloads ? (
+          <ActionButton
+            icon={<PublishDownloadsIcon />}
+            label={strings.publishAsDownloads}
+            disabled={!canPublishDownloads}
+            onClick={onPublishDownloads}
+          />
+        ) : null}
+        {onPublishBookshelf ? (
+          <ActionButton
+            icon={<PublishBookshelfIcon />}
+            label={strings.publishAsBookshelf}
+            disabled={!canPublishBookshelf}
+            onClick={onPublishBookshelf}
           />
         ) : null}
         <ActionButton

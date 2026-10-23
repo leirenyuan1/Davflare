@@ -16,6 +16,10 @@ import { FeatureFlagName, FeatureFlags, useFeatures } from "./app/features";
 import { NotifyFn } from "./app/notify";
 import { strings } from "./app/strings";
 import { errorMessage } from "./app/utils";
+import BackupCronCard from "./BackupCronCard";
+import ImageHostExportCard from "./ImageHostExportCard";
+import McpExportCard from "./McpExportCard";
+import MobileUploadCard from "./MobileUploadCard";
 
 const SWITCHES: Array<{
   key: FeatureFlagName;
@@ -133,6 +137,10 @@ function SettingsView({
             />
           </Box>
         ))}
+        <McpExportCard onNotify={onNotify} />
+        <BackupCronCard onNotify={onNotify} />
+        <ImageHostExportCard onNotify={onNotify} />
+        <MobileUploadCard onNotify={onNotify} />
       </Stack>
     </Box>
   );

@@ -708,3 +708,722 @@ export function renderDocsIndex(options: {
 </div>`;
   return docShell(lang, options.siteTitle, body);
 }
+
+// ---------------------------------------------------------------- 播客 / RSS
+
+/** 单集上限：与相册同量级；总大小对齐公开目录（音视频更大）。 */
+export const PODCAST_MAX_EPISODES = 200;
+export const PODCAST_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+export const PODCAST_FEED_NAME = "feed.xml";
+
+const MEDIA_AUDIO_EXTS = new Set(["mp3", "m4a", "aac", "ogg", "opus", "wav", "flac"]);
+const MEDIA_VIDEO_EXTS = new Set(["mp4", "m4v", "webm", "mov", "mkv"]);
+const MEDIA_MIME: Record<string, string> = {
+  mp3: "audio/mpeg",
+  m4a: "audio/mp4",
+  aac: "audio/aac",
+  ogg: "audio/ogg",
+  opus: "audio/ogg",
+  wav: "audio/wav",
+  flac: "audio/flac",
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  mkv: "video/x-matroska",
+};
+
+export function mediaExtension(filename: string): string | null {
+  const base = filename.replace(/\\/g, "/").split("/").filter(Boolean).pop() || "";
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0 || dot === base.length - 1) return null;
+  const ext = base.slice(dot + 1).toLowerCase();
+  if (MEDIA_AUDIO_EXTS.has(ext) || MEDIA_VIDEO_EXTS.has(ext)) return ext;
+  return null;
+}
+
+export function isMediaFileName(filename: string): boolean {
+  return mediaExtension(filename) !== null;
+}
+
+export function mediaMimeType(filename: string): string {
+  const ext = mediaExtension(filename);
+  return (ext && MEDIA_MIME[ext]) || "application/octet-stream";
+}
+
+export function isAudioFileName(filename: string): boolean {
+  const ext = mediaExtension(filename);
+  return Boolean(ext && MEDIA_AUDIO_EXTS.has(ext));
+}
+
+/** attempt 从 1 起；保留 index.html / feed.xml / 清单名。 */
+export function podcastNameCandidate(filename: string, attempt: number): string | null {
+  const ext = mediaExtension(filename);
+  if (!ext || !Number.isInteger(attempt) || attempt < 1 || attempt > 10000) return null;
+  const stem = albumStem(filename, ext);
+  const name = attempt === 1 ? `${stem}.${ext}` : `${stem}-${attempt}.${ext}`;
+  const lower = name.toLowerCase();
+  if (
+    lower === "index.html" ||
+    lower === PODCAST_FEED_NAME ||
+    lower === ALBUM_MANIFEST_NAME ||
+    lower === ".davflare-manifest.json"
+  ) {
+    return null;
+  }
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return null;
+  return name;
+}
+
+export function checkPodcastLimits(
+  count: number,
+  bytes: number
+): { ok: true } | { ok: false; error: string } {
+  if (!Number.isFinite(count) || count <= 0) return { ok: false, error: "no podcast media" };
+  if (count > PODCAST_MAX_EPISODES) {
+    return {
+      ok: false,
+      error: `podcast episode limit exceeded: ${count} > ${PODCAST_MAX_EPISODES}`,
+    };
+  }
+  if (!Number.isFinite(bytes) || bytes < 0) return { ok: false, error: "bad podcast" };
+  if (bytes > PODCAST_MAX_BYTES) {
+    return {
+      ok: false,
+      error: `podcast size limit exceeded: ${bytes} > ${PODCAST_MAX_BYTES}`,
+    };
+  }
+  return { ok: true };
+}
+
+export type PodcastEpisode = {
+  name: string;
+  size: number;
+  uploaded: string;
+  contentType: string;
+  /** 绝对或相对的媒体 URL（enclosure / 播放器用） */
+  url: string;
+};
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;")
+    .replace(/\u0000/g, "");
+}
+
+function rfc822Date(value: string): string {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return new Date(0).toUTCString();
+  return new Date(time).toUTCString();
+}
+
+/** 频道页 link / enclosure 基址：有 SITES_HOST 时 https://host/slug */
+export function podcastPublicBase(sitesHost: string | null, slug: string): string | null {
+  const host = (sitesHost || "").trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  if (!host || !slug) return null;
+  return `https://${host}/${slug}`;
+}
+
+export function renderPodcastFeed(options: {
+  lang: PageLang;
+  title: string;
+  description?: string;
+  slug: string;
+  sitesHost: string | null;
+  episodes: PodcastEpisode[];
+}): string {
+  if (options.episodes.length > PODCAST_MAX_EPISODES) {
+    throw new Error(
+      `podcast episode limit exceeded: ${options.episodes.length} > ${PODCAST_MAX_EPISODES}`
+    );
+  }
+  const lang = options.lang === "zh" ? "zh" : "en";
+  const base = podcastPublicBase(options.sitesHost, options.slug);
+  const channelLink = base ? `${base}/` : "";
+  const feedLink = base ? `${base}/${PODCAST_FEED_NAME}` : PODCAST_FEED_NAME;
+  const desc =
+    (options.description || "").trim() ||
+    pageLabel(lang, "sitePodcastDescription", { title: options.title });
+  const lastBuild =
+    options.episodes[0]?.uploaded != null
+      ? rfc822Date(options.episodes[0].uploaded)
+      : new Date().toUTCString();
+  const items = options.episodes
+    .map((ep) => {
+      const url = ep.url || (base ? `${base}/${encodeURIComponent(ep.name)}` : ep.name);
+      const title = ep.name.replace(/\.[^.]+$/, "") || ep.name;
+      return `    <item>
+      <title>${escapeXml(title)}</title>
+      <link>${escapeXml(url)}</link>
+      <guid isPermaLink="true">${escapeXml(url)}</guid>
+      <pubDate>${escapeXml(rfc822Date(ep.uploaded))}</pubDate>
+      <enclosure url="${escapeXml(url)}" length="${Math.max(0, Math.floor(ep.size))}" type="${escapeXml(
+        ep.contentType || mediaMimeType(ep.name)
+      )}"/>
+    </item>`;
+    })
+    .join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>${escapeXml(options.title)}</title>
+    <link>${escapeXml(channelLink || feedLink)}</link>
+    <description>${escapeXml(desc)}</description>
+    <language>${lang === "zh" ? "zh-cn" : "en-us"}</language>
+    <lastBuildDate>${escapeXml(lastBuild)}</lastBuildDate>
+${items}
+  </channel>
+</rss>
+`;
+}
+
+export function renderPodcastPage(options: {
+  lang: PageLang;
+  title: string;
+  feedHref: string;
+  episodes: PodcastEpisode[];
+}): string {
+  if (options.episodes.length > PODCAST_MAX_EPISODES) {
+    throw new Error(
+      `podcast episode limit exceeded: ${options.episodes.length} > ${PODCAST_MAX_EPISODES}`
+    );
+  }
+  const lang = options.lang === "zh" ? "zh" : "en";
+  const rows = options.episodes
+    .map((ep) => {
+      const href = escapeHtml(ep.url || encodeURIComponent(ep.name));
+      const name = escapeHtml(ep.name);
+      const size = escapeHtml(formatSiteBytes(ep.size));
+      const time = formatSiteTime(ep.uploaded);
+      const audio = isAudioFileName(ep.name);
+      const player = audio
+        ? `<audio controls preload="none" src="${href}"></audio>`
+        : `<video controls preload="none" src="${href}" style="max-width:100%;max-height:220px;border-radius:10px;background:#000"></video>`;
+      return `<li class="episode">
+  <div class="ep-head"><a href="${href}">${name}</a><span class="ep-meta">${size}${
+        time ? ` · <time datetime="${escapeHtml(time.iso)}">${escapeHtml(time.text)}</time>` : ""
+      }</span></div>
+  ${player}
+</li>`;
+    })
+    .join("\n");
+  const body = `<section class="card">
+  <h1>${escapeHtml(options.title)}</h1>
+  <p class="meta">${escapeHtml(
+    pageLabel(lang, "sitePodcastCount", { count: options.episodes.length })
+  )}</p>
+  <p class="meta"><a class="feed" href="${escapeHtml(options.feedHref)}">${escapeHtml(
+    pageLabel(lang, "sitePodcastFeedLink")
+  )}</a> · ${escapeHtml(pageLabel(lang, "sitePodcastFeedHint"))}</p>
+  ${
+    rows
+      ? `<ol class="episodes">${rows}</ol>`
+      : `<p class="empty">${escapeHtml(pageLabel(lang, "sitePodcastEmpty"))}</p>`
+  }
+</section>
+<style>
+.episodes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.episode { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.ep-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; margin-bottom: 8px; }
+.ep-head a { color: inherit; text-decoration: none; font-weight: 600; word-break: break-all; }
+.ep-head a:hover { color: var(--brand); }
+.ep-meta { color: var(--muted); font-size: .85rem; }
+a.feed { color: var(--brand); font-weight: 600; }
+audio { width: 100%; }
+</style>`;
+  return docShell(lang, options.title, body);
+}
+
+// —— 软件下载页 / Releases（kind: downloads）——
+export const DOWNLOADS_MAX_FILES = 100;
+export const DOWNLOADS_MAX_BYTES = 256 * 1024 * 1024;
+export const DOWNLOADS_README_MAX_CHARS = 100_000;
+
+const DOWNLOADS_MIME: Record<string, string> = {
+  zip: "application/zip",
+  "7z": "application/x-7z-compressed",
+  rar: "application/vnd.rar",
+  tar: "application/x-tar",
+  gz: "application/gzip",
+  tgz: "application/gzip",
+  bz2: "application/x-bzip2",
+  xz: "application/x-xz",
+  exe: "application/vnd.microsoft.portable-executable",
+  msi: "application/x-msi",
+  msix: "application/msix",
+  dmg: "application/x-apple-diskimage",
+  pkg: "application/octet-stream",
+  appimage: "application/octet-stream",
+  deb: "application/vnd.debian.binary-package",
+  rpm: "application/x-rpm",
+  apk: "application/vnd.android.package-archive",
+  ipa: "application/octet-stream",
+  jar: "application/java-archive",
+  nupkg: "application/octet-stream",
+  vsix: "application/octet-stream",
+  flatpak: "application/vnd.flatpak",
+  snap: "application/octet-stream",
+};
+
+/** 同目录 README.md / README.markdown 作更新说明，不进下载列表。 */
+export function isDownloadsReadmeName(filename: string): boolean {
+  return /^readme\.(md|markdown)$/i.test(filename.trim());
+}
+
+/** 顶层可发布资源：普通文件；跳过 README、隐藏文件。 */
+export function isDownloadsAssetName(filename: string): boolean {
+  const name = filename.trim();
+  if (!name || name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  if (name.startsWith(".")) return false;
+  if (isDownloadsReadmeName(name)) return false;
+  return true;
+}
+
+export function downloadsMimeType(filename: string): string {
+  const base = filename.split(/[/\\]/).pop() || filename;
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0 || dot === base.length - 1) return "application/octet-stream";
+  const ext = base.slice(dot + 1).toLowerCase();
+  return DOWNLOADS_MIME[ext] || "application/octet-stream";
+}
+
+/** attempt 从 1 起；保留 index.html / 清单名。 */
+export function downloadsNameCandidate(filename: string, attempt: number): string | null {
+  if (!isDownloadsAssetName(filename) || !Number.isInteger(attempt) || attempt < 1 || attempt > 10000) {
+    return null;
+  }
+  const base = filename.split(/[/\\]/).pop() || filename;
+  const dot = base.lastIndexOf(".");
+  const hasExt = dot > 0 && dot < base.length - 1;
+  const ext = hasExt ? base.slice(dot + 1) : "";
+  const stem = hasExt ? albumStem(base, ext) : albumStem(`${base}.bin`, "bin");
+  const name =
+    attempt === 1
+      ? hasExt
+        ? `${stem}.${ext}`
+        : stem
+      : hasExt
+        ? `${stem}-${attempt}.${ext}`
+        : `${stem}-${attempt}`;
+  const lower = name.toLowerCase();
+  if (
+    lower === "index.html" ||
+    lower === ALBUM_MANIFEST_NAME ||
+    lower === ".davflare-manifest.json" ||
+    isDownloadsReadmeName(name)
+  ) {
+    return null;
+  }
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return null;
+  return name;
+}
+
+export function checkDownloadsLimits(
+  count: number,
+  bytes: number
+): { ok: true } | { ok: false; error: string } {
+  if (!Number.isFinite(count) || count <= 0) return { ok: false, error: "no downloads assets" };
+  if (count > DOWNLOADS_MAX_FILES) {
+    return {
+      ok: false,
+      error: `downloads file limit exceeded: ${count} > ${DOWNLOADS_MAX_FILES}`,
+    };
+  }
+  if (!Number.isFinite(bytes) || bytes < 0) return { ok: false, error: "bad downloads" };
+  if (bytes > DOWNLOADS_MAX_BYTES) {
+    return {
+      ok: false,
+      error: `downloads size limit exceeded: ${bytes} > ${DOWNLOADS_MAX_BYTES}`,
+    };
+  }
+  return { ok: true };
+}
+
+export type DownloadsAsset = {
+  name: string;
+  size: number;
+  sha256: string;
+  uploaded: string;
+  contentType: string;
+  url: string;
+};
+
+/** Reuse podcastPublicBase for https://host/slug */
+export const downloadsPublicBase = podcastPublicBase;
+
+/**
+ * 极简 Markdown → HTML（无原始 HTML、无脚本）。用于 README 更新说明。
+ * 支持：#/##/###、段落、列表、- *、有序、**粗**、*斜*、`码`、```围栏、[链](http)、---。
+ */
+export function renderReleaseNotesMarkdown(source: string): string {
+  const raw = source.replace(/\r\n/g, "\n").replace(/\u0000/g, "").slice(0, DOWNLOADS_README_MAX_CHARS);
+  const lines = raw.split("\n");
+  const parts: string[] = [];
+  let i = 0;
+  let inCode = false;
+  let codeLang = "";
+  let codeLines: string[] = [];
+  let listType: "ul" | "ol" | null = null;
+  let listItems: string[] = [];
+
+  const flushList = () => {
+    if (!listType || listItems.length === 0) {
+      listType = null;
+      listItems = [];
+      return;
+    }
+    const tag = listType;
+    parts.push(`<${tag}>${listItems.map((item) => `<li>${item}</li>`).join("")}</${tag}>`);
+    listType = null;
+    listItems = [];
+  };
+
+  const inline = (text: string): string => {
+    let out = escapeHtml(text);
+    out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+    out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    out = out.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+    out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label: string, href: string) => {
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    });
+    return out;
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (inCode) {
+      if (/^```/.test(line)) {
+        parts.push(
+          `<pre><code${codeLang ? ` class="language-${escapeHtml(codeLang)}"` : ""}>${escapeHtml(
+            codeLines.join("\n")
+          )}</code></pre>`
+        );
+        inCode = false;
+        codeLang = "";
+        codeLines = [];
+      } else {
+        codeLines.push(line);
+      }
+      i += 1;
+      continue;
+    }
+    const fence = line.match(/^```([\w-]*)\s*$/);
+    if (fence) {
+      flushList();
+      inCode = true;
+      codeLang = fence[1] || "";
+      codeLines = [];
+      i += 1;
+      continue;
+    }
+    if (/^(\*\s*\*\s*\*|-{3,}|_{3,})\s*$/.test(line)) {
+      flushList();
+      parts.push("<hr/>");
+      i += 1;
+      continue;
+    }
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      flushList();
+      const level = heading[1].length;
+      parts.push(`<h${level}>${inline(heading[2].trim())}</h${level}>`);
+      i += 1;
+      continue;
+    }
+    const ul = line.match(/^[-*]\s+(.+)$/);
+    if (ul) {
+      if (listType && listType !== "ul") flushList();
+      listType = "ul";
+      listItems.push(inline(ul[1]));
+      i += 1;
+      continue;
+    }
+    const ol = line.match(/^\d+[.)]\s+(.+)$/);
+    if (ol) {
+      if (listType && listType !== "ol") flushList();
+      listType = "ol";
+      listItems.push(inline(ol[1]));
+      i += 1;
+      continue;
+    }
+    if (!line.trim()) {
+      flushList();
+      i += 1;
+      continue;
+    }
+    flushList();
+    parts.push(`<p>${inline(line.trim())}</p>`);
+    i += 1;
+  }
+  flushList();
+  if (inCode) {
+    parts.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  }
+  return parts.join("\n");
+}
+
+export function renderDownloadsPage(options: {
+  lang: PageLang;
+  title: string;
+  files: DownloadsAsset[];
+  readmeHtml?: string | null;
+}): string {
+  if (options.files.length > DOWNLOADS_MAX_FILES) {
+    throw new Error(
+      `downloads file limit exceeded: ${options.files.length} > ${DOWNLOADS_MAX_FILES}`
+    );
+  }
+  const lang = options.lang === "zh" ? "zh" : "en";
+  const files = options.files.filter((file) => file.name);
+  const total = files.reduce((sum, file) => sum + (Number.isFinite(file.size) ? file.size : 0), 0);
+  const rows = files
+    .map((file) => {
+      const name = escapeHtml(file.name);
+      const href = escapeHtml(file.url || encodeURIComponent(file.name));
+      const size = escapeHtml(formatSiteBytes(file.size));
+      const sha = escapeHtml(file.sha256);
+      return `<tr>
+  <td class="name"><a href="${href}" download="${name}">${name}</a></td>
+  <td class="num">${size}</td>
+  <td class="hash"><code title="${sha}">${sha}</code></td>
+  <td class="num"><a class="dl" href="${href}" download="${name}">${escapeHtml(
+        pageLabel(lang, "siteDownloadsDownload")
+      )}</a></td>
+</tr>`;
+    })
+    .join("\n");
+  const table = rows
+    ? `<table class="files"><thead><tr>
+  <th>${escapeHtml(pageLabel(lang, "siteDownloadsName"))}</th>
+  <th class="num">${escapeHtml(pageLabel(lang, "siteDownloadsSize"))}</th>
+  <th>${escapeHtml(pageLabel(lang, "siteDownloadsSha256"))}</th>
+  <th class="num"></th>
+</tr></thead><tbody>${rows}</tbody></table>`
+    : `<p class="empty">${escapeHtml(pageLabel(lang, "siteDownloadsEmpty"))}</p>`;
+  const notes =
+    options.readmeHtml && options.readmeHtml.trim()
+      ? `<section class="card notes"><h2>${escapeHtml(
+          pageLabel(lang, "siteDownloadsNotes")
+        )}</h2><article class="md">${options.readmeHtml}</article></section>`
+      : "";
+  const body = `<section class="card">
+  <h1>${escapeHtml(options.title)}</h1>
+  <p class="meta">${escapeHtml(
+    pageLabel(lang, "siteDownloadsCount", { count: files.length, size: formatSiteBytes(total) })
+  )}</p>
+  ${table}
+</section>
+${notes}
+<style>
+.files td.hash { font-size: .78rem; word-break: break-all; max-width: 28rem; }
+.files td.hash code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--hover); padding: .15em .4em; border-radius: 6px;
+}
+.notes { margin-top: 16px; }
+.notes h2 { font-size: 1.05rem; margin: 0 0 10px; }
+.notes .md > *:first-child { margin-top: 0; }
+.notes .md p { margin: 0 0 .8em; }
+.notes .md ul, .notes .md ol { margin: 0 0 .8em; padding-left: 1.3em; }
+.notes .md pre {
+  background: var(--hover); padding: 12px 14px; border-radius: 10px; overflow: auto;
+}
+.notes .md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em;
+  background: var(--hover); padding: .1em .35em; border-radius: 5px;
+}
+.notes .md pre code { background: transparent; padding: 0; }
+.notes .md a { color: var(--brand); }
+.notes .md hr { border: 0; border-top: 1px solid var(--line); margin: 1.2em 0; }
+</style>`;
+  return docShell(lang, options.title, body);
+}
+
+// —— PDF 资料库 / 电子书架（kind: bookshelf）——
+export const BOOKSHELF_MAX_FILES = 200;
+export const BOOKSHELF_MAX_BYTES = 512 * 1024 * 1024;
+
+const BOOKSHELF_MIME: Record<string, string> = {
+  pdf: "application/pdf",
+  epub: "application/epub+zip",
+};
+
+const BOOKSHELF_EXTS = new Set(Object.keys(BOOKSHELF_MIME));
+
+/** 顶层 PDF / EPUB（可选）才进书架；跳过隐藏文件与其它类型。 */
+export function isBookshelfAssetName(filename: string): boolean {
+  const name = filename.trim();
+  if (!name || name.includes("/") || name.includes("\\") || name.includes("..")) return false;
+  if (name.startsWith(".")) return false;
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || dot === name.length - 1) return false;
+  return BOOKSHELF_EXTS.has(name.slice(dot + 1).toLowerCase());
+}
+
+export function bookshelfMimeType(filename: string): string {
+  const base = filename.split(/[/\\]/).pop() || filename;
+  const dot = base.lastIndexOf(".");
+  if (dot <= 0 || dot === base.length - 1) return "application/octet-stream";
+  const ext = base.slice(dot + 1).toLowerCase();
+  return BOOKSHELF_MIME[ext] || "application/octet-stream";
+}
+
+/** attempt 从 1 起；保留 index.html / 清单名 / covers/。 */
+export function bookshelfNameCandidate(filename: string, attempt: number): string | null {
+  if (!isBookshelfAssetName(filename) || !Number.isInteger(attempt) || attempt < 1 || attempt > 10000) {
+    return null;
+  }
+  const base = filename.split(/[/\\]/).pop() || filename;
+  const dot = base.lastIndexOf(".");
+  const ext = base.slice(dot + 1).toLowerCase();
+  const stem = albumStem(base, ext);
+  const name = attempt === 1 ? `${stem}.${ext}` : `${stem}-${attempt}.${ext}`;
+  const lower = name.toLowerCase();
+  if (
+    lower === "index.html" ||
+    lower === ALBUM_MANIFEST_NAME ||
+    lower === ".davflare-manifest.json" ||
+    lower === "feed.xml" ||
+    lower.startsWith("covers/")
+  ) {
+    return null;
+  }
+  if (name.includes("/") || name.includes("\\") || name.includes("..")) return null;
+  return name;
+}
+
+/** 封面相对路径：covers/{stem}.png */
+export function bookshelfCoverRel(publishedName: string): string {
+  const base = publishedName.split(/[/\\]/).pop() || publishedName;
+  const dot = base.lastIndexOf(".");
+  const hasExt = dot > 0 && dot < base.length - 1;
+  const ext = hasExt ? base.slice(dot + 1).toLowerCase() : "bin";
+  const stem = albumStem(hasExt ? base : `${base}.bin`, ext);
+  return `covers/${stem}.png`;
+}
+
+export function checkBookshelfLimits(
+  count: number,
+  bytes: number
+): { ok: true } | { ok: false; error: string } {
+  if (!Number.isFinite(count) || count <= 0) return { ok: false, error: "no bookshelf assets" };
+  if (count > BOOKSHELF_MAX_FILES) {
+    return {
+      ok: false,
+      error: `bookshelf file limit exceeded: ${count} > ${BOOKSHELF_MAX_FILES}`,
+    };
+  }
+  if (!Number.isFinite(bytes) || bytes < 0) return { ok: false, error: "bad bookshelf" };
+  if (bytes > BOOKSHELF_MAX_BYTES) {
+    return {
+      ok: false,
+      error: `bookshelf size limit exceeded: ${bytes} > ${BOOKSHELF_MAX_BYTES}`,
+    };
+  }
+  return { ok: true };
+}
+
+export type BookshelfAsset = {
+  name: string;
+  size: number;
+  uploaded: string;
+  contentType: string;
+  url: string;
+  /** 相对站点根的封面图；没有缩略图时为 null */
+  cover: string | null;
+};
+
+/** Reuse podcastPublicBase for https://host/slug */
+export const bookshelfPublicBase = podcastPublicBase;
+
+export function renderBookshelfPage(options: {
+  lang: PageLang;
+  title: string;
+  files: BookshelfAsset[];
+}): string {
+  if (options.files.length > BOOKSHELF_MAX_FILES) {
+    throw new Error(
+      `bookshelf file limit exceeded: ${options.files.length} > ${BOOKSHELF_MAX_FILES}`
+    );
+  }
+  const lang = options.lang === "zh" ? "zh" : "en";
+  const files = options.files.filter((file) => file.name);
+  const total = files.reduce((sum, file) => sum + (Number.isFinite(file.size) ? file.size : 0), 0);
+  const cards = files
+    .map((file) => {
+      const name = escapeHtml(file.name);
+      const href = escapeHtml(file.url || encodeURIComponent(file.name));
+      const size = escapeHtml(formatSiteBytes(file.size));
+      const cover = file.cover
+        ? `<img class="cover" src="${escapeHtml(file.cover)}" alt="" loading="lazy" />`
+        : `<div class="cover placeholder" aria-hidden="true">${escapeHtml(
+            pageLabel(lang, "siteBookshelfNoCover")
+          )}</div>`;
+      return `<article class="book">
+  <a class="cover-link" href="${href}" target="_blank" rel="noopener noreferrer">${cover}</a>
+  <div class="info">
+    <h2 class="title"><a href="${href}" target="_blank" rel="noopener noreferrer">${name}</a></h2>
+    <p class="size">${size}</p>
+    <p class="actions">
+      <a class="open" href="${href}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+        pageLabel(lang, "siteBookshelfOpen")
+      )}</a>
+      <a class="dl" href="${href}" download="${name}">${escapeHtml(
+        pageLabel(lang, "siteBookshelfDownload")
+      )}</a>
+    </p>
+  </div>
+</article>`;
+    })
+    .join("\n");
+  const grid = cards
+    ? `<div class="shelf">${cards}</div>`
+    : `<p class="empty">${escapeHtml(pageLabel(lang, "siteBookshelfEmpty"))}</p>`;
+  const body = `<section class="card">
+  <h1>${escapeHtml(options.title)}</h1>
+  <p class="meta">${escapeHtml(
+    pageLabel(lang, "siteBookshelfCount", { count: files.length, size: formatSiteBytes(total) })
+  )}</p>
+  ${grid}
+</section>
+<style>
+.shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 14px;
+}
+.book {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--hover); border-radius: 14px; padding: 10px;
+  border: 1px solid var(--line);
+}
+.cover-link { display: block; text-decoration: none; color: inherit; }
+.cover {
+  display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover;
+  border-radius: 10px; background: var(--paper);
+}
+.cover.placeholder {
+  display: flex; align-items: center; justify-content: center;
+  font-size: .78rem; color: var(--muted); text-align: center; padding: 8px;
+}
+.info .title {
+  font-size: .92rem; margin: 0; line-height: 1.35;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.info .title a { color: inherit; text-decoration: none; }
+.info .title a:hover { color: var(--brand); }
+.info .size { margin: 0; color: var(--muted); font-size: .8rem; }
+.info .actions {
+  margin: 2px 0 0; display: flex; flex-wrap: wrap; gap: 8px; font-size: .82rem;
+}
+.info .actions a {
+  color: var(--brand); text-decoration: none; font-weight: 600;
+}
+.info .actions a:hover { text-decoration: underline; }
+</style>`;
+  return docShell(lang, options.title, body);
+}

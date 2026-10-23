@@ -128,8 +128,45 @@ jobs:
 - 所有 slug 共用站点域（`sites.domain/a/` 和 `/b/`）。自己用没问题；不要在同一站点域托管别人不可信的 HTML。
 - 不要把 API 密钥写进上传的 HTML。
 
+## 10 分钟把 R2 变成 Markdown 图床
+
+Markdown 编辑器用同一套 `POST /api/images` + API Key —— **不新增接口**。
+
+1. 绑定 `SITES_HOST`，在 `#/settings` 保持 **API Key** 与 **图床** 开启，创建密钥。
+2. 在 **图床客户端** 卡片导出（或拷贝 [`agents/examples/image-host-export/`](../agents/examples/image-host-export/)）：
+   - **ShareX** — `.sxcu`（Binary 体、`Authorization` / `X-Api-Key`、`X-File-Name: {filename}`、URL `{json:url}`）。导入前把 `YOUR_API_KEY` 换成真密钥。
+   - **Typora** — Custom Command 一行（`curl` + `sed` 打印 `url`）；`$1` 为本地路径。
+   - **PicGo / PicList** — [`picgo-plugin-davflare`](../picgo-plugin-davflare/)：填站点地址（网盘源）与 API Key。可从本目录本地安装；仓库主人在该包执行 `npm publish` 后也可用 `picgo install picgo-plugin-davflare`（**禁止机器人代发**）。
+3. 上传一张测试图；公开地址为 `https://<SITES_HOST>/i/{id}`（API 还返回 Markdown `![](url)`）。
+
+原始 curl（与 Typora / 脚本相同）：
+
+```bash
+curl -X POST "https://<你的域名>/api/images" \
+  -H "Authorization: Bearer <apiKey>" \
+  -H "X-File-Name: shot.png" \
+  --data-binary @shot.png
+```
+
+## 文件夹一键发播客 / RSS
+
+选中音视频文件夹 → **发布为播客 / RSS**。写出 `sites/{slug}/feed.xml`（RSS 2.0，enclosure 直链 `SITES_HOST`）与列表播放页。与相册/公开目录/文档站同一 `POST /api/sites`，**不新增接口**。样例：[agents/examples/podcast-rss/](../agents/examples/podcast-rss/)。
+
+## 粘贴截图上图床
+
+在文件管理器、`#/images` 或 `#/settings`（图床客户端）按 **Ctrl/Cmd+V**：剪贴板图片走现有 `POST /api/images`，toast 一键复制 `https://<SITES_HOST>/i/{id}`。文件管理器里同一张图还会入队当前目录。与顶栏「文本快传」不冲突（文本走按钮）。样例：[agents/examples/paste-image-host/](../agents/examples/paste-image-host/)。
+
 ## 图床界面
 
 在网盘界面（`#/images`）拖放上传图片，复制公开 URL 或 Markdown `![](url)`，列出并删除。对象存在 `_$flaredrive$/img/{id}`，`{id}` 为不可猜测的随机值，不是原文件名。公开地址仅为 `https://<SITES_HOST>/i/{id}`（`SITES_HOST` 不含协议）。SVG 以附件下发（`Content-Disposition: attachment` + `nosniff`），不会当成可执行页面打开。
 
 站点域名上先匹配 `/i/{id}`，再走 slug 静态站。图床开关与站点开关独立：站点关、图床开 → slug 404 但 `/i/{id}` 可用；图床关 → 即使站点开，`/i/*` 也是 404。未配置 `SITES_HOST` 时开关仍在，界面会提示先绑定该域名。
+
+## 软件下载页（「R2 上的 Releases」）
+
+选中安装包/zip 文件夹 → **发布为软件下载页**。写出 `sites/{slug}/index.html`，列出 **文件名、大小、SHA-256**；同目录 `README.md` 可选渲染为更新说明。与相册/公开目录/文档站/播客同一 `POST /api/sites`（`downloads` 载荷），**不新增接口**。样例：[agents/examples/folder-downloads/](../agents/examples/folder-downloads/)。
+
+## PDF 资料库 / 电子书架
+
+选中 PDF（可选 EPUB）文件夹 → **发布为 PDF 资料库**。写出 `sites/{slug}/index.html` 书架页（文件名、大小、浏览器打开/下载；有缩略图时复制为封面）。与相册/公开目录/文档站/播客/软件下载页同一 `POST /api/sites`（`bookshelf` 载荷），**不新增接口**。样例：[agents/examples/folder-bookshelf/](../agents/examples/folder-bookshelf/)。
+

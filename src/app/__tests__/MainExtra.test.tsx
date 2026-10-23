@@ -75,6 +75,16 @@ vi.mock("../../PublishSiteDialog", () => ({
   default: ({ open, folder }: { open: boolean; folder: { name?: string } | null }) =>
     open ? <div>publish-stub:{folder?.name ?? ""}</div> : null,
 }));
+vi.mock("../../PublishPodcastDialog", () => ({
+  __esModule: true,
+  default: ({ open, folder }: { open: boolean; folder: { name?: string } | null }) =>
+    open ? <div>publish-podcast-stub:{folder?.name ?? ""}</div> : null,
+}));
+vi.mock("../../PublishDownloadsDialog", () => ({
+  __esModule: true,
+  default: ({ open, folder }: { open: boolean; folder: { name?: string } | null }) =>
+    open ? <div>publish-downloads-stub:{folder?.name ?? ""}</div> : null,
+}));
 vi.mock("../../PublishDirDialog", () => ({
   __esModule: true,
   default: ({ open, folder }: { open: boolean; folder: { name?: string } | null }) =>
@@ -385,6 +395,22 @@ describe("Main 上下文菜单动作", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: strings.publishAsDir }));
     await waitFor(() => expect(screen.getByText("publish-dir-stub:docs")).toBeInTheDocument());
   });
+
+  test("文件夹菜单发布为播客打开对话框", async () => {
+    renderMain();
+    await waitFor(() => expect(screen.getByText("docs")).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText(translate("fileActionsLabel", { name: "docs" })));
+    fireEvent.click(screen.getByRole("menuitem", { name: strings.publishAsPodcast }));
+    await waitFor(() => expect(screen.getByText("publish-podcast-stub:docs")).toBeInTheDocument());
+  });
+
+  test("文件夹菜单发布为软件下载页打开对话框", async () => {
+    renderMain();
+    await waitFor(() => expect(screen.getByText("docs")).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText(translate("fileActionsLabel", { name: "docs" })));
+    fireEvent.click(screen.getByRole("menuitem", { name: strings.publishAsDownloads }));
+    await waitFor(() => expect(screen.getByText("publish-downloads-stub:docs")).toBeInTheDocument());
+  });
 });
 
 describe("Main 删除-撤销/重试闭环", () => {
@@ -569,6 +595,15 @@ describe("Main 多选工具栏", () => {
     const toolbar = document.querySelector(".MuiToolbar-root")!;
     fireEvent.click(within(toolbar as HTMLElement).getByRole("button", { name: strings.publishAsDir }));
     await waitFor(() => expect(screen.getByText("publish-dir-stub:docs")).toBeInTheDocument());
+  });
+
+  test("单选文件夹 → 发布为软件下载页", async () => {
+    renderMain();
+    await waitFor(() => expect(screen.getByText("docs")).toBeInTheDocument());
+    fireEvent.click(screen.getByLabelText(translate("selectFileLabel", { name: "docs" })));
+    const toolbar = document.querySelector(".MuiToolbar-root")!;
+    fireEvent.click(within(toolbar as HTMLElement).getByRole("button", { name: strings.publishAsDownloads }));
+    await waitFor(() => expect(screen.getByText("publish-downloads-stub:docs")).toBeInTheDocument());
   });
 
 describe("Main 空目录入口", () => {

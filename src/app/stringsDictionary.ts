@@ -11,6 +11,25 @@ const entries: Record<string, DictionaryEntry> = {
   takePhoto: { zh: "拍照", en: "Take photo" },
   createFolder: { zh: "新建文件夹", en: "New folder" },
   openTextPad: { zh: "记事本", en: "Notepad" },
+  pasteShareTitle: { zh: "文本快传", en: "Quick paste" },
+  pasteShareHint: {
+    zh: "粘贴文本后生成带过期与可选提取码的分享链接；落地页等宽预览并可一键复制。",
+    en: "Paste text to create a share link with optional expiry and extract code. The landing page shows a monospace preview with one-click copy.",
+  },
+  pasteShareContent: { zh: "文本内容", en: "Text" },
+  pasteShareChars: { zh: "{n} / {max} 字符", en: "{n} / {max} characters" },
+  pasteShareCreate: { zh: "生成分享链接", en: "Create share link" },
+  pasteShareCreating: { zh: "生成中…", en: "Creating…" },
+  pasteShareDoneHint: {
+    zh: "链接已生成。打开后可等宽预览、复制全文或下载 .txt。",
+    en: "Link ready. Visitors get a monospace preview, copy button, and .txt download.",
+  },
+  pasteShareAnother: { zh: "再建一条", en: "Paste another" },
+  pasteCreated: { zh: "文本快传链接已创建", en: "Paste share link created" },
+  pasteCreatedCopied: { zh: "文本快传链接已创建并复制", en: "Paste share link created and copied" },
+  pasteEmpty: { zh: "请先粘贴或输入文本", en: "Paste or type some text first" },
+  pasteTooLarge: { zh: "文本过长（上限约 512 KB）", en: "Text is too long (max about 512 KB)" },
+  pasteUploadFailed: { zh: "上传文本失败", en: "Failed to upload text" },
   noFiles: { zh: "这里还没有文件", en: "Nothing here yet" },
   noFilesHint: { zh: "上传文件，或新建一个文件夹", en: "Upload a file, or create a folder" },
   noSearchResult: { zh: "没有找到文件", en: "No files found" },
@@ -158,8 +177,8 @@ const entries: Record<string, DictionaryEntry> = {
   imagesSection: { zh: "图床", en: "Images" },
   imagesTitle: { zh: "图床", en: "Image host" },
   imagesHint: {
-    zh: "拖放图片上传。公开地址只在站点域名：https://<SITES_HOST>/i/{id}",
-    en: "Drop images to upload. Public URLs live only on the sites host: https://<SITES_HOST>/i/{id}",
+    zh: "拖放或 Ctrl/Cmd+V 粘贴截图上传。公开地址只在站点域名：https://<SITES_HOST>/i/{id}",
+    en: "Drop or Ctrl/Cmd+V paste a screenshot to upload. Public URLs live only on the sites host: https://<SITES_HOST>/i/{id}",
   },
   imagesHostMissing: { zh: "未配置 SITES_HOST，公开地址打不开", en: "SITES_HOST is not set — public URLs will not open" },
   imagesHostMissingHint: {
@@ -167,7 +186,7 @@ const entries: Record<string, DictionaryEntry> = {
     en: "Bind a custom domain to this Pages project AND set the Pages env SITES_HOST (hostname only, no https://), then redeploy. Until then public image URLs will not open.",
   },
   emptyImages: { zh: "还没有图片", en: "No images yet" },
-  emptyImagesHint: { zh: "把图片拖到这里，或点击上传", en: "Drop an image here, or click upload" },
+  emptyImagesHint: { zh: "把图片拖到这里、粘贴截图，或点击上传", en: "Drop an image, paste a screenshot, or click upload" },
   uploadImages: { zh: "上传图片", en: "Upload images" },
   copyImageUrl: { zh: "复制链接", en: "Copy URL" },
   copyImageMarkdown: { zh: "复制 Markdown", en: "Copy Markdown" },
@@ -181,10 +200,123 @@ const entries: Record<string, DictionaryEntry> = {
   notAnImage: { zh: "只能上传图片文件", en: "Only image files can be uploaded" },
   imageUrlCopied: { zh: "链接已复制", en: "URL copied" },
   imageMarkdownCopied: { zh: "Markdown 已复制", en: "Markdown copied" },
+  pasteImageHostUploaded: {
+    zh: "已上传到图床：{name}",
+    en: "Uploaded to image host: {name}",
+  },
+  pasteImageHostUploadedCopied: {
+    zh: "已上传到图床，链接已复制：{name}",
+    en: "Uploaded to image host — URL copied: {name}",
+  },
+  pasteImageHostUploadedNoUrl: {
+    zh: "已上传到图床：{name}（未配置 SITES_HOST，暂无公开链接）",
+    en: "Uploaded to image host: {name} (SITES_HOST unset — no public URL yet)",
+  },
+  pasteImageHostHint: {
+    zh: "文件管理器或本页也可 Ctrl/Cmd+V 粘贴截图：两秒拿到 CDN 链（复用 POST /api/images，不新增接口）。",
+    en: "In the file manager or here, Ctrl/Cmd+V a screenshot to get a CDN URL in seconds (reuses POST /api/images — no new API).",
+  },
   mcpRequiresApiKey: {
     zh: "MCP 依赖 API Key 开关：若 API Key 关闭，即使 MCP 开关打开，/mcp 也是 404。",
     en: "MCP depends on the API Key switch: if Key is off, /mcp is 404 even if MCP is on.",
   },
+  mcpExportTitle: {
+    zh: "接入 Claude / Cursor MCP",
+    en: "Connect Claude / Cursor MCP",
+  },
+  mcpExportHint: {
+    zh: "用现有同源 /mcp + API Key，一键导出客户端配置。不新增接口。下载文件里只有环境变量占位，不会写入明文密钥。",
+    en: "Export client configs for the existing same-origin /mcp + API Key. No new APIs. Downloads use env placeholders only — never a live key.",
+  },
+  mcpExportEnvHint: {
+    zh: "先在设置里打开 MCP 与 API Key 并创建密钥，再把 {env} 设成该密钥（Cursor 配置里写 ${env:{env}}；Claude Desktop 需在启动前导出同名环境变量）。",
+    en: "Turn on MCP + API Key in Settings and create a key, then set {env} to that key (Cursor config uses ${env:{env}}; Claude Desktop: export the same env var before launch).",
+  },
+  mcpExportCursorTitle: { zh: "Cursor", en: "Cursor" },
+  mcpExportCursorHint: {
+    zh: "保存为 ~/.cursor/mcp.json 或仓库内 .cursor/mcp.json，重启 Cursor。",
+    en: "Save as ~/.cursor/mcp.json or <repo>/.cursor/mcp.json, then restart Cursor.",
+  },
+  mcpExportClaudeTitle: { zh: "Claude Desktop", en: "Claude Desktop" },
+  mcpExportClaudeHint: {
+    zh: "Claude Desktop 配置只支持本地 stdio：用 mcp-remote 桥接远程 /mcp。合并进 claude_desktop_config.json 后完全退出再打开 Claude。",
+    en: "Claude Desktop config is stdio-only: bridge remote /mcp with mcp-remote. Merge into claude_desktop_config.json, then fully quit and reopen Claude.",
+  },
+  mcpExportCopyCursor: { zh: "复制 Cursor 配置", en: "Copy Cursor config" },
+  mcpExportDownloadCursor: { zh: "下载 mcp.json", en: "Download mcp.json" },
+  mcpExportCopyClaude: { zh: "复制 Claude 配置", en: "Copy Claude config" },
+  mcpExportDownloadClaude: {
+    zh: "下载 claude_desktop_config.json",
+    en: "Download claude_desktop_config.json",
+  },
+  mcpExportCursorCopied: { zh: "Cursor mcp.json 已复制", en: "Cursor mcp.json copied" },
+  mcpExportClaudeCopied: {
+    zh: "Claude Desktop 配置已复制",
+    en: "Claude Desktop config copied",
+  },
+  mcpExportDownloaded: { zh: "配置已下载", en: "Config downloaded" },
+  mcpExportCopyFailed: { zh: "复制失败", en: "Copy failed" },
+  mcpExportDownloadFailed: { zh: "下载失败", en: "Download failed" },
+  backupCronTitle: {
+    zh: "定时备份",
+    en: "Scheduled backup",
+  },
+  backupCronHint: {
+    zh: "一键复制 davflare sync push|pull 的 crontab 行。复用现有 CLI，不新增接口。",
+    en: "Copy crontab lines for davflare sync push|pull. Reuses the existing CLI — no new APIs.",
+  },
+  backupCronEnvHint: {
+    zh: "密钥不要写进 crontab：先 davflare login（写入 ~/.config/davflare/config.json），或把 {serverEnv} / {keyEnv} 放进 ~/.config/davflare/env（chmod 600）。",
+    en: "Never put keys in crontab: run davflare login (~/.config/davflare/config.json), or export {serverEnv} / {keyEnv} in ~/.config/davflare/env (chmod 600).",
+  },
+  backupCronPushTitle: { zh: "本地 → 云端（push）", en: "Local → cloud (push)" },
+  backupCronPullTitle: { zh: "云端 → 本地（pull）", en: "Cloud → local (pull)" },
+  backupCronFullTitle: { zh: "完整模板（含说明）", en: "Full template (with comments)" },
+  backupCronFullHint: {
+    zh: "含 login / env 说明、push 与 pull 示例。粘贴进 crontab -e 前请改本地与远端路径。",
+    en: "Includes login/env notes plus push and pull samples. Edit local/remote paths before crontab -e.",
+  },
+  backupCronCopyPush: { zh: "复制 push 行", en: "Copy push line" },
+  backupCronCopyPull: { zh: "复制 pull 行", en: "Copy pull line" },
+  backupCronCopyFull: { zh: "复制完整模板", en: "Copy full template" },
+  backupCronPushCopied: { zh: "push crontab 已复制", en: "push crontab copied" },
+  backupCronPullCopied: { zh: "pull crontab 已复制", en: "pull crontab copied" },
+  backupCronFullCopied: { zh: "备份 crontab 模板已复制", en: "Backup crontab template copied" },
+  backupCronCopyFailed: { zh: "复制失败", en: "Copy failed" },
+  imageHostExportTitle: {
+    zh: "图床客户端（PicGo / ShareX / Typora）",
+    en: "Image host clients (PicGo / ShareX / Typora)",
+  },
+  imageHostExportHint: {
+    zh: "复用现有 POST /api/images 与 API Key，不新增接口。公开地址来自响应里的 https://<SITES_HOST>/i/{id}。也可在本页或文件管理器 Ctrl/Cmd+V 粘贴截图，两秒拿 CDN 链。",
+    en: "Reuses existing POST /api/images and API keys — no new APIs. Public URL comes from the response as https://<SITES_HOST>/i/{id}. Or Ctrl/Cmd+V a screenshot here or in the file manager for a CDN URL in seconds.",
+  },
+  imageHostExportKeyHint: {
+    zh: "导出内容用占位符 {placeholder}，导入前换成网页端创建的 fd_… 密钥。",
+    en: "Exports use placeholder {placeholder}; replace it with your fd_… key from the web UI before importing.",
+  },
+  imageHostExportShareXTitle: { zh: "ShareX", en: "ShareX" },
+  imageHostExportShareXHint: {
+    zh: "下载 .sxcu 后用记事本替换 YOUR_API_KEY，再双击导入 ShareX「自定义图床」。",
+    en: "Download the .sxcu, replace YOUR_API_KEY in a text editor, then double-click to import into ShareX Custom uploaders.",
+  },
+  imageHostExportTyporaTitle: { zh: "Typora 自定义命令", en: "Typora custom command" },
+  imageHostExportTyporaHint: {
+    zh: "偏好设置 → 图像 → 上传服务选「Custom Command」，粘贴下面一行（$1 为本地路径；先把 YOUR_API_KEY 换成真密钥）。",
+    en: "Preferences → Image → Upload services → Custom Command; paste the one-liner ($1 is the file path; replace YOUR_API_KEY first).",
+  },
+  imageHostExportPicGoHint: {
+    zh: "PicGo / PicList：安装仓库内 picgo-plugin-davflare（本地导入或 npm publish 后 picgo install），填站点地址与 API Key。",
+    en: "PicGo / PicList: install picgo-plugin-davflare from this repo (local import, or picgo install after npm publish); set site URL + API Key.",
+  },
+  imageHostExportCopyShareX: { zh: "复制 ShareX 配置", en: "Copy ShareX config" },
+  imageHostExportDownloadShareX: { zh: "下载 .sxcu", en: "Download .sxcu" },
+  imageHostExportCopyTypora: { zh: "复制 Typora 命令", en: "Copy Typora command" },
+  imageHostExportShareXCopied: { zh: "ShareX 配置已复制", en: "ShareX config copied" },
+  imageHostExportTyporaCopied: { zh: "Typora 命令已复制", en: "Typora command copied" },
+  imageHostExportDownloaded: { zh: "配置已下载", en: "Config downloaded" },
+  imageHostExportCopyFailed: { zh: "复制失败", en: "Copy failed" },
+  imageHostExportDownloadFailed: { zh: "下载失败", en: "Download failed" },
   setupTitle: { zh: "部署检查", en: "Setup checklist" },
   setupHint: {
     zh: "部署后快速确认 R2、WebDAV、功能开关、SITES_HOST 与 MCP。全部适用项通过后可复制 Cursor mcp.json（Bearer 占位符）。",
@@ -694,6 +826,188 @@ const entries: Record<string, DictionaryEntry> = {
   publishAlbumDone: { zh: "相册已发布（{count} 张）", en: "Album published ({count} image(s))" },
   publishAlbumPublishing: { zh: "正在发布…", en: "Publishing…" },
   publishAlbumFailed: { zh: "发布相册失败", en: "Failed to publish album" },
+  // —— 播客 / RSS ——
+  sitePodcastHeading: { zh: "播客", en: "Podcast" },
+  sitePodcastEmpty: { zh: "还没有节目", en: "No episodes yet" },
+  sitePodcastCount: { zh: "{count} 集", en: "{count} episode(s)" },
+  sitePodcastFeedLink: { zh: "RSS 订阅", en: "RSS feed" },
+  sitePodcastFeedHint: {
+    zh: "把 feed.xml 地址加到播客客户端即可收听",
+    en: "Add the feed.xml URL in a podcast app to subscribe",
+  },
+  sitePodcastDescription: {
+    zh: "{title} — 由 Davflare 发布",
+    en: "{title} — published with Davflare",
+  },
+  siteKindPodcast: { zh: "播客", en: "podcast" },
+  publishAsPodcast: { zh: "发布为播客 / RSS", en: "Publish as podcast / RSS" },
+  publishPodcastTitle: { zh: "发布为播客 / RSS", en: "Publish as podcast / RSS" },
+  publishPodcastLoading: { zh: "正在读取文件夹…", en: "Reading folder…" },
+  publishPodcastLoadFailed: { zh: "读取文件夹失败", en: "Failed to read the folder" },
+  publishPodcastSummary: {
+    zh: "当前层 {count} 个音视频，共 {size}。将复制到 sites/{slug}/，生成 feed.xml（RSS 2.0）与列表播放页。",
+    en: "{count} top-level audio/video file(s), {size} total. Copied into sites/{slug}/ with feed.xml (RSS 2.0) and a list player page.",
+  },
+  publishPodcastIgnored: {
+    zh: "已忽略 {count} 个非音视频文件。",
+    en: "Ignored {count} non-media file(s).",
+  },
+  publishPodcastSubdirs: {
+    zh: "子文件夹不会发布（{count} 个）。",
+    en: "Subfolders are not published ({count}).",
+  },
+  publishPodcastHint: {
+    zh: "与相册 / 文档站 / 公开目录 / 导航站不同：面向播客客户端，enclosure 直链 SITES_HOST 上的媒体。发布的是副本；更新请重新发布。",
+    en: "Unlike album / docs / public directory / nav sites: built for podcast apps, with enclosures pointing at media on SITES_HOST. Published files are copies — republish to update.",
+  },
+  publishPodcastSlugHint: {
+    zh: "公开地址：https://<SITES_HOST>/{slug}/feed.xml",
+    en: "Public URL: https://<SITES_HOST>/{slug}/feed.xml",
+  },
+  publishPodcastNoMedia: {
+    zh: "这个文件夹当前层没有音视频，无法发布播客。",
+    en: "This folder has no top-level audio/video files. Cannot publish a podcast.",
+  },
+  publishPodcastTooMany: {
+    zh: "音视频 {count} 个，超过上限 {max} 集，未发布。",
+    en: "{count} media files exceed the limit of {max} episodes. Nothing was published.",
+  },
+  publishPodcastTooLarge: {
+    zh: "音视频共 {size}，超过上限 {max}，未发布。",
+    en: "Media total {size}, over the {max} limit. Nothing was published.",
+  },
+  publishPodcastDone: {
+    zh: "播客已发布（{count} 集）",
+    en: "Podcast published ({count} episode(s))",
+  },
+  publishPodcastDoneCopied: {
+    zh: "播客已发布（{count} 集），feed 链接已复制",
+    en: "Podcast published ({count} episode(s)) — feed URL copied",
+  },
+  publishPodcastFailed: { zh: "发布播客失败", en: "Failed to publish podcast" },
+  publishPodcastFeedUrl: { zh: "RSS 地址", en: "RSS feed URL" },
+  publishPodcastCopyFeed: { zh: "复制 feed 地址", en: "Copy feed URL" },
+  publishPodcastOpenPage: { zh: "打开播放页", en: "Open player page" },
+
+  // —— 软件下载页 / Releases ——
+  siteDownloadsHeading: { zh: "下载", en: "Downloads" },
+  siteDownloadsEmpty: { zh: "还没有可下载的文件。", en: "No downloadable files yet." },
+  siteDownloadsCount: { zh: "{count} 个文件 · 共 {size}", en: "{count} file(s) · {size} total" },
+  siteDownloadsName: { zh: "文件名", en: "Name" },
+  siteDownloadsSize: { zh: "大小", en: "Size" },
+  siteDownloadsSha256: { zh: "SHA-256", en: "SHA-256" },
+  siteDownloadsDownload: { zh: "下载", en: "Download" },
+  siteDownloadsNotes: { zh: "更新说明", en: "Release notes" },
+  siteKindDownloads: { zh: "软件下载页", en: "download page" },
+  publishAsDownloads: { zh: "发布为软件下载页", en: "Publish as download page" },
+  publishDownloadsTitle: { zh: "发布为软件下载页", en: "Publish as download page" },
+  publishDownloadsLoading: { zh: "正在读取文件夹…", en: "Reading folder…" },
+  publishDownloadsLoadFailed: { zh: "读取文件夹失败", en: "Failed to read the folder" },
+  publishDownloadsSummary: {
+    zh: "当前层 {count} 个文件，共 {size}。将复制到 sites/{slug}/，生成带文件名 / 大小 / SHA-256 的下载页。",
+    en: "{count} top-level file(s), {size} total. Copied into sites/{slug}/ with a download page listing name, size, and SHA-256.",
+  },
+  publishDownloadsReadme: {
+    zh: "将把同目录 README.md 渲染为更新说明。",
+    en: "README.md in this folder will be rendered as release notes.",
+  },
+  publishDownloadsIgnored: {
+    zh: "已忽略 {count} 个文件（隐藏文件等）。",
+    en: "Ignored {count} file(s) (hidden files, etc.).",
+  },
+  publishDownloadsSubdirs: {
+    zh: "子文件夹不会发布（{count} 个）。",
+    en: "Subfolders are not published ({count}).",
+  },
+  publishDownloadsHint: {
+    zh: "与公开目录 / 相册 / 文档站 / 播客 / 导航站不同：面向「R2 上的 Releases」——列出校验和，可选 README 更新说明。发布的是副本；更新请重新发布。",
+    en: "Unlike public directory / album / docs / podcast / nav: built as “Releases on R2” — checksums, optional README notes. Published files are copies — republish to update.",
+  },
+  publishDownloadsSlugHint: {
+    zh: "公开地址：https://<SITES_HOST>/{slug}/",
+    en: "Public URL: https://<SITES_HOST>/{slug}/",
+  },
+  publishDownloadsNoAssets: {
+    zh: "这个文件夹当前层没有可发布的安装包/文件，无法发布下载页。",
+    en: "This folder has no top-level installers/files. Cannot publish a download page.",
+  },
+  publishDownloadsTooMany: {
+    zh: "文件 {count} 个，超过上限 {max} 个，未发布。",
+    en: "{count} files exceed the limit of {max}. Nothing was published.",
+  },
+  publishDownloadsTooLarge: {
+    zh: "文件共 {size}，超过上限 {max}（需计算 SHA-256），未发布。",
+    en: "Files total {size}, over the {max} limit (SHA-256 is computed on publish). Nothing was published.",
+  },
+  publishDownloadsDone: {
+    zh: "下载页已发布（{count} 个文件）",
+    en: "Download page published ({count} file(s))",
+  },
+  publishDownloadsDoneCopied: {
+    zh: "下载页已发布（{count} 个文件），链接已复制",
+    en: "Download page published ({count} file(s)) — URL copied",
+  },
+  publishDownloadsFailed: { zh: "发布下载页失败", en: "Failed to publish download page" },
+  publishDownloadsPageUrl: { zh: "下载页地址", en: "Download page URL" },
+  publishDownloadsCopyUrl: { zh: "复制链接", en: "Copy URL" },
+  publishDownloadsOpenPage: { zh: "打开下载页", en: "Open download page" },
+
+  siteBookshelfHeading: { zh: "资料库", en: "Library" },
+  siteBookshelfEmpty: { zh: "还没有可打开的文件。", en: "No books yet." },
+  siteBookshelfCount: { zh: "{count} 本 · 共 {size}", en: "{count} item(s) · {size} total" },
+  siteBookshelfOpen: { zh: "打开", en: "Open" },
+  siteBookshelfDownload: { zh: "下载", en: "Download" },
+  siteBookshelfNoCover: { zh: "无封面", en: "No cover" },
+  siteKindBookshelf: { zh: "PDF 资料库", en: "PDF library" },
+  publishAsBookshelf: { zh: "发布为 PDF 资料库", en: "Publish as PDF library" },
+  publishBookshelfTitle: { zh: "发布为 PDF 资料库", en: "Publish as PDF library" },
+  publishBookshelfLoading: { zh: "正在读取文件夹…", en: "Reading folder…" },
+  publishBookshelfLoadFailed: { zh: "读取文件夹失败", en: "Failed to read the folder" },
+  publishBookshelfSummary: {
+    zh: "将发布 {count} 个 PDF/EPUB（共 {size}）到 {slug}",
+    en: "Will publish {count} PDF/EPUB file(s) ({size}) to {slug}",
+  },
+  publishBookshelfIgnored: {
+    zh: "已忽略 {count} 个非 PDF/EPUB 文件",
+    en: "Ignored {count} non-PDF/EPUB file(s)",
+  },
+  publishBookshelfSubdirs: {
+    zh: "已跳过 {count} 个子文件夹（只发布当前层）",
+    en: "Skipped {count} subfolder(s) (top level only)",
+  },
+  publishBookshelfHint: {
+    zh: "生成书架页：文件名、大小、浏览器打开/下载；有缩略图时用作封面。复用现有静态站发布，不新增接口。",
+    en: "Builds a bookshelf page with name, size, open/download; existing thumbnails become covers. Reuses static-site publish — no new API.",
+  },
+  publishBookshelfSlugHint: {
+    zh: "地址只含小写字母、数字和连字符",
+    en: "Slug: lowercase letters, digits, and hyphens",
+  },
+  publishBookshelfNoAssets: {
+    zh: "当前层没有可发布的 PDF/EPUB",
+    en: "No top-level PDF/EPUB files to publish",
+  },
+  publishBookshelfTooMany: {
+    zh: "文件数 {count} 超过上限 {max}",
+    en: "{count} files exceed the limit of {max}",
+  },
+  publishBookshelfTooLarge: {
+    zh: "总大小 {size} 超过上限 {max}",
+    en: "Total size {size} exceeds the limit of {max}",
+  },
+  publishBookshelfDone: {
+    zh: "已发布 {count} 个文件到资料库",
+    en: "Published {count} file(s) to the library",
+  },
+  publishBookshelfDoneCopied: {
+    zh: "已发布 {count} 个文件，链接已复制",
+    en: "Published {count} file(s); link copied",
+  },
+  publishBookshelfFailed: { zh: "发布资料库失败", en: "Failed to publish PDF library" },
+  publishBookshelfPageUrl: { zh: "资料库地址", en: "Library URL" },
+  publishBookshelfCopyUrl: { zh: "复制链接", en: "Copy URL" },
+  publishBookshelfOpenPage: { zh: "打开资料库", en: "Open library" },
+
   // —— 公开目录（站点页 + 网盘对话框）——
   siteDirCount: { zh: "{count} 个文件 · 共 {size}", en: "{count} file(s) · {size} total" },
   siteDirName: { zh: "文件名", en: "Name" },
@@ -899,6 +1213,11 @@ const entries: Record<string, DictionaryEntry> = {
     en: "No request links yet. Choose “Request files” from a folder's menu to create one.",
   },
   collectDisable: { zh: "停用", en: "Disable" },
+  collectDisableConfirmTitle: { zh: "停用收集链接？", en: "Disable this request link?" },
+  collectDisableConfirmMsg: {
+    zh: "停用后不能恢复，拿到链接的人将无法再上传。已上传的文件不受影响。",
+    en: "This can't be undone. Anyone with the link will no longer be able to upload. Files already uploaded stay put.",
+  },
   collectDisabledToast: { zh: "收集链接已停用", en: "Request link disabled" },
   collectDeletedToast: { zh: "收集链接已删除", en: "Request link deleted" },
   collectStatusActive: { zh: "收集中", en: "Open" },
@@ -913,6 +1232,64 @@ const entries: Record<string, DictionaryEntry> = {
   createCollectFailed: { zh: "创建收集链接失败", en: "Failed to create request link" },
   disableCollectFailed: { zh: "停用收集链接失败", en: "Failed to disable request link" },
   deleteCollectFailed: { zh: "删除收集链接失败", en: "Failed to delete request link" },
+  mobileUploadTitle: {
+    zh: "手机一键上传（iOS 快捷指令 / Android）",
+    en: "Phone upload (iOS Shortcuts / Android)",
+  },
+  mobileUploadHint: {
+    zh: "分享菜单把文件丢进免费 R2：复用现有 POST /api/upload（网盘目录）或 POST /api/images（公开 CDN）。不新增接口 / MCP。",
+    en: "Share Sheet → free R2. Reuses existing POST /api/upload (drive folder) or POST /api/images (public CDN). No new APIs / MCP.",
+  },
+  mobileUploadKeyHint: {
+    zh: "导出内容用占位符 {placeholder}，在快捷指令 / HTTP Shortcuts 里换成网页端创建的 fd_… 密钥。",
+    en: "Exports use placeholder {placeholder}; replace it with your fd_… key from the web UI inside Shortcuts / HTTP Shortcuts.",
+  },
+  mobileUploadPathLabel: { zh: "目标文件夹", en: "Target folder" },
+  mobileUploadPathHint: {
+    zh: "写入 /api/upload?path=…；空则根目录。图床模式忽略此路径。",
+    en: "Used as /api/upload?path=…; empty = bucket root. Image-host mode ignores this path.",
+  },
+  mobileUploadValuesTitle: { zh: "填入值", en: "Values to paste" },
+  mobileUploadValuesHint: {
+    zh: "复制站点、上传地址与鉴权头，贴进快捷指令「获取 URL 内容」或 Android HTTP Shortcuts。",
+    en: "Copy origin, upload URL, and auth headers into Shortcuts “Get Contents of URL” or Android HTTP Shortcuts.",
+  },
+  mobileUploadIosTitle: { zh: "iOS 快捷指令", en: "iOS Shortcuts" },
+  mobileUploadIosHint: {
+    zh: "官方无法在仓库里附带 .shortcut 二进制；按下述步骤自建一条，约 30 秒。",
+    en: "Apple Shortcuts binaries aren’t shipped in-repo; build one from these steps (~30 seconds).",
+  },
+  mobileUploadIosRecipe: {
+    zh: "1. 打开「快捷指令」→ ＋新建 → 右上角「…」→ 打开「显示在分享表单」，接收「文件」与「图像」。\n2. 添加「快捷指令输入」（或「获取文件」）拿到分享进来的文件。\n3. 添加「获取 URL 内容」：\n   · URL：{uploadUrl}\n   · 方法：POST\n   · 请求体：文件（选上一步）\n   · 标头 Authorization：Bearer {placeholder}\n   · 标头 X-Api-Key：{placeholder}\n   · 标头 X-File-Name：分享文件的名称（可用「获取文件的详情」）\n4. 把 {placeholder} 换成网页「API」创建的 fd_… 密钥。\n5. 在照片 / 文件 App 点分享 → 「上传到 Davflare」试传；文件出现在目标文件夹。\n\n若只要公开图床链：把 URL 换成 {imagesUrl}（同样的鉴权与 X-File-Name），响应 JSON 的 url 即 https://<SITES_HOST>/i/<id>。",
+    en: "1. Open Shortcuts → + → … → enable Show in Share Sheet; accept Files and Images.\n2. Add Shortcut Input (or Get File) for the shared item.\n3. Add Get Contents of URL:\n   · URL: {uploadUrl}\n   · Method: POST\n   · Request Body: File (from the previous step)\n   · Header Authorization: Bearer {placeholder}\n   · Header X-Api-Key: {placeholder}\n   · Header X-File-Name: the shared file’s name (Get Details of Files)\n4. Replace {placeholder} with your fd_… key from the web API page.\n5. In Photos / Files, Share → your shortcut; the file lands in the target folder.\n\nFor a public image CDN URL instead: use {imagesUrl} with the same auth + X-File-Name; JSON url is https://<SITES_HOST>/i/<id>.",
+  },
+  mobileUploadAndroidTitle: {
+    zh: "Android（HTTP Shortcuts / curl）",
+    en: "Android (HTTP Shortcuts / curl)",
+  },
+  mobileUploadAndroidHint: {
+    zh: "用下方 recipe JSON 对照新建，或把 curl 粘进 HTTP Shortcuts「从 cURL 导入」。Tasker 等同理。",
+    en: "Recreate from the recipe JSON, or paste the curl into HTTP Shortcuts “Import from cURL”. Same idea in Tasker.",
+  },
+  mobileUploadCopyValues: { zh: "复制填入值", en: "Copy values" },
+  mobileUploadCopyUploadUrl: { zh: "复制上传 URL", en: "Copy upload URL" },
+  mobileUploadCopyImagesUrl: { zh: "复制图床 URL", en: "Copy images URL" },
+  mobileUploadCopyIos: { zh: "复制 iOS 步骤", en: "Copy iOS steps" },
+  mobileUploadCopyAndroid: { zh: "复制 Android recipe", en: "Copy Android recipe" },
+  mobileUploadDownloadAndroid: { zh: "下载 Android JSON", en: "Download Android JSON" },
+  mobileUploadCopyCurl: { zh: "复制上传 curl", en: "Copy upload curl" },
+  mobileUploadCopyImagesCurl: { zh: "复制图床 curl", en: "Copy images curl" },
+  mobileUploadValuesCopied: { zh: "填入值已复制", en: "Values copied" },
+  mobileUploadUploadUrlCopied: { zh: "上传 URL 已复制", en: "Upload URL copied" },
+  mobileUploadImagesUrlCopied: { zh: "图床 URL 已复制", en: "Images URL copied" },
+  mobileUploadIosCopied: { zh: "iOS 步骤已复制", en: "iOS steps copied" },
+  mobileUploadAndroidCopied: { zh: "Android recipe 已复制", en: "Android recipe copied" },
+  mobileUploadCurlCopied: { zh: "上传 curl 已复制", en: "Upload curl copied" },
+  mobileUploadImagesCurlCopied: { zh: "图床 curl 已复制", en: "Images curl copied" },
+  mobileUploadDownloaded: { zh: "配置已下载", en: "Config downloaded" },
+  mobileUploadCopyFailed: { zh: "复制失败", en: "Copy failed" },
+  mobileUploadDownloadFailed: { zh: "下载失败", en: "Download failed" },
 };
+
 
 export default entries;

@@ -25,6 +25,9 @@ import PathBar, { SearchScope } from "./PathBar";
 import RenameDialog from "./RenameDialog";
 import PublishSiteDialog from "./PublishSiteDialog";
 import PublishAlbumDialog from "./PublishAlbumDialog";
+import PublishPodcastDialog from "./PublishPodcastDialog";
+import PublishDownloadsDialog from "./PublishDownloadsDialog";
+import PublishBookshelfDialog from "./PublishBookshelfDialog";
 import PublishDirDialog from "./PublishDirDialog";
 import PublishDocsDialog, { DocsPublishSource } from "./PublishDocsDialog";
 import { isMarkdownName } from "./app/docsSite";
@@ -35,6 +38,7 @@ import SettingsView from "./SettingsView";
 import SetupView from "./SetupView";
 import McpPlaygroundView from "./McpPlaygroundView";
 import TextPadDrawer from "./TextPadDrawer";
+import PasteDialog from "./PasteDialog";
 import TrashView from "./TrashView";
 import WebDavPanel from "./WebDavPanel";
 import { useClipboard } from "./app/clipboard";
@@ -128,6 +132,7 @@ function Main({
   const [searchScope, setSearchScope] = useState<SearchScope>("folder");
   const [showCreateFolder, setShowCreateFolder] = useState(false);
   const [showTextPadDrawer, setShowTextPadDrawer] = useState(false);
+  const [showPasteDialog, setShowPasteDialog] = useState(false);
   const [showWebDav, setShowWebDav] = useState(false);
   const [typeFilter, setTypeFilter] = useState<FileTypeFilter>("all");
   const [showHidden, setShowHidden] = usePersistedState(
@@ -149,6 +154,9 @@ function Main({
   const [collectTarget, setCollectTarget] = useState<FileItem | null>(null);
   const [publishTarget, setPublishTarget] = useState<FileItem | null>(null);
   const [publishDirTarget, setPublishDirTarget] = useState<FileItem | null>(null);
+  const [publishPodcastTarget, setPublishPodcastTarget] = useState<FileItem | null>(null);
+  const [publishDownloadsTarget, setPublishDownloadsTarget] = useState<FileItem | null>(null);
+  const [publishBookshelfTarget, setPublishBookshelfTarget] = useState<FileItem | null>(null);
   const [publishDocsSource, setPublishDocsSource] = useState<DocsPublishSource | null>(null);
   const [albumTarget, setAlbumTarget] = useState<{
     images: FileItem[];
@@ -393,9 +401,11 @@ function Main({
   });
 
   usePasteUpload({
-    active: route.kind === "folder",
-    enqueueToCwd,
+    active: route.kind === "folder" || route.kind === "settings",
+    enqueueToCwd: route.kind === "folder" ? enqueueToCwd : undefined,
     onNotify,
+    imageHostEnabled: flags.imageHost,
+    alsoSaveImagesToCwd: route.kind === "folder",
   });
 
   const dropActive = useDragDropUpload({
@@ -431,6 +441,12 @@ function Main({
             return;
           }
           window.setTimeout(() => setPublishTarget(file), 50);
+        } else if (action === "publishPodcast") {
+          if (file.isDir) window.setTimeout(() => setPublishPodcastTarget(file), 50);
+        } else if (action === "publishDownloads") {
+          if (file.isDir) window.setTimeout(() => setPublishDownloadsTarget(file), 50);
+        } else if (action === "publishBookshelf") {
+          if (file.isDir) window.setTimeout(() => setPublishBookshelfTarget(file), 50);
         } else if (action === "publishDir") {
           if (!file.isDir) {
             onNotify(translate("publishSiteOnlyFolder"), "error");
@@ -607,6 +623,7 @@ function Main({
           onUploadFolder={openFolderPicker}
           onCreateFolder={() => setShowCreateFolder(true)}
           onOpenTextPad={() => setShowTextPadDrawer(true)}
+          onOpenPasteShare={() => setShowPasteDialog(true)}
           onPaste={handlePaste}
           canPaste={canPaste}
           clipboardCount={clipboard?.keys.length ?? 0}
@@ -798,6 +815,14 @@ function Main({
         onUpload={loadListing}
       />
 
+      <PasteDialog
+        open={showPasteDialog}
+        cwd={cwd}
+        onClose={() => setShowPasteDialog(false)}
+        onNotify={onNotify}
+        onCreated={loadListing}
+      />
+
       <FileActionSheet
         file={contextMenu?.file ?? null}
         anchorPosition={
@@ -866,6 +891,24 @@ function Main({
         onNotify={onNotify}
       />
 
+      <PublishPodcastDialog
+        open={Boolean(publishPodcastTarget)}
+        folder={publishPodcastTarget}
+        onClose={() => setPublishPodcastTarget(null)}
+        onNotify={onNotify}
+      />
+      <PublishDownloadsDialog
+        open={Boolean(publishDownloadsTarget)}
+        folder={publishDownloadsTarget}
+        onClose={() => setPublishDownloadsTarget(null)}
+        onNotify={onNotify}
+      />
+      <PublishBookshelfDialog
+        open={Boolean(publishBookshelfTarget)}
+        folder={publishBookshelfTarget}
+        onClose={() => setPublishBookshelfTarget(null)}
+        onNotify={onNotify}
+      />
       <PublishDirDialog
         open={Boolean(publishDirTarget)}
         folder={publishDirTarget}
@@ -968,6 +1011,7 @@ function Main({
         onUploadFolder={openFolderPicker}
         onCreateFolder={() => setShowCreateFolder(true)}
         onOpenTextPad={() => setShowTextPadDrawer(true)}
+        onOpenPasteShare={() => setShowPasteDialog(true)}
       />
 
       <MultiSelectToolbar
@@ -1083,6 +1127,36 @@ function Main({
             images,
             ignored: ignored + (selectedKeys.length - selected.length),
           });
+        }}
+        canPublishPodcast={
+          flags.sites &&
+          selectedKeys.length === 1 &&
+          Boolean(files.find((item) => item.key === selectedKeys[0])?.isDir)
+        }
+        onPublishPodcast={() => {
+          if (selectedKeys.length !== 1) return;
+          const file = files.find((item) => item.key === selectedKeys[0]);
+          if (file?.isDir) setPublishPodcastTarget(file);
+        }}
+        canPublishDownloads={
+          flags.sites &&
+          selectedKeys.length === 1 &&
+          Boolean(files.find((item) => item.key === selectedKeys[0])?.isDir)
+        }
+        onPublishDownloads={() => {
+          if (selectedKeys.length !== 1) return;
+          const file = files.find((item) => item.key === selectedKeys[0]);
+          if (file?.isDir) setPublishDownloadsTarget(file);
+        }}
+        canPublishBookshelf={
+          flags.sites &&
+          selectedKeys.length === 1 &&
+          Boolean(files.find((item) => item.key === selectedKeys[0])?.isDir)
+        }
+        onPublishBookshelf={() => {
+          if (selectedKeys.length !== 1) return;
+          const file = files.find((item) => item.key === selectedKeys[0]);
+          if (file?.isDir) setPublishBookshelfTarget(file);
         }}
       />
     </Box>

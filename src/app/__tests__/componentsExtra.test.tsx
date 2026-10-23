@@ -135,6 +135,29 @@ describe("MultiSelectToolbar", () => {
     expect(onPublishDocs).toHaveBeenCalled();
   });
 
+  test("canPublishDownloads 控制软件下载页按钮", () => {
+    const onPublishDownloads = vi.fn();
+    const { rerender } = render(
+      <MultiSelectToolbar
+        {...props}
+        selectedKeys={["dir"]}
+        onPublishDownloads={onPublishDownloads}
+        canPublishDownloads={false}
+      />
+    );
+    expect(screen.getByText(strings.publishAsDownloads).closest("button")).toBeDisabled();
+    rerender(
+      <MultiSelectToolbar
+        {...props}
+        selectedKeys={["dir"]}
+        onPublishDownloads={onPublishDownloads}
+        canPublishDownloads
+      />
+    );
+    fireEvent.click(screen.getByText(strings.publishAsDownloads));
+    expect(onPublishDownloads).toHaveBeenCalled();
+  });
+
   test("发布为公开目录与静态站共用 canPublish，且紧跟静态站按钮", () => {
     const onPublishDir = vi.fn();
     const { rerender } = render(
@@ -205,6 +228,8 @@ describe("FileActionSheet", () => {
     expect(screen.getByText(strings.publishAsSite)).toBeInTheDocument();
     expect(screen.getByText(strings.publishAsDir)).toBeInTheDocument();
     expect(screen.getByText(strings.publishAsDocs)).toBeInTheDocument();
+    expect(screen.getByText(strings.publishAsPodcast)).toBeInTheDocument();
+    expect(screen.getByText(strings.publishAsDownloads)).toBeInTheDocument();
   });
 
   test(".md 文件显示发布为文档站，普通文件不显示", () => {
@@ -253,6 +278,38 @@ describe("FileActionSheet", () => {
     );
     expect(screen.queryByText(strings.publishAsSite)).not.toBeInTheDocument();
     expect(screen.queryByText(strings.publishAsDir)).not.toBeInTheDocument();
+  });
+
+  test("目录发布为播客触发 onAction", async () => {
+    const onAction = vi.fn();
+    const dir = { ...file, isDir: true, key: "d", name: "d" };
+    render(
+      <FileActionSheet
+        file={dir}
+        anchorPosition={{ top: 10, left: 20 }}
+        onClose={vi.fn()}
+        onAction={onAction}
+        sitesEnabled
+      />
+    );
+    fireEvent.click(screen.getByText(strings.publishAsPodcast));
+    await waitFor(() => expect(onAction).toHaveBeenCalledWith("publishPodcast", dir));
+  });
+
+  test("目录发布为软件下载页触发 onAction", async () => {
+    const onAction = vi.fn();
+    const dir = { ...file, isDir: true, key: "d", name: "d" };
+    render(
+      <FileActionSheet
+        file={dir}
+        anchorPosition={{ top: 10, left: 20 }}
+        onClose={vi.fn()}
+        onAction={onAction}
+        sitesEnabled
+      />
+    );
+    fireEvent.click(screen.getByText(strings.publishAsDownloads));
+    await waitFor(() => expect(onAction).toHaveBeenCalledWith("publishDownloads", dir));
   });
 
   test("收集文件只对文件夹显示", async () => {

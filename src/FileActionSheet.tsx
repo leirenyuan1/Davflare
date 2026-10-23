@@ -24,6 +24,9 @@ import {
   Language as PublishIcon,
   FolderShared as PublishDirIcon,
   MenuBook as PublishDocsIcon,
+  Podcasts as PublishPodcastIcon,
+  Inventory2 as PublishDownloadsIcon,
+  AutoStories as PublishBookshelfIcon,
   DriveFolderUpload as CollectIcon,
 } from "@mui/icons-material";
 import { isMarkdownName } from "./app/docsSite";
@@ -42,6 +45,9 @@ export type FileAction =
   | "publishSite"
   | "publishDir"
   | "publishDocs"
+  | "publishPodcast"
+  | "publishDownloads"
+  | "publishBookshelf"
   | "copy"
   | "cut"
   | "delete";
@@ -85,6 +91,27 @@ const ACTIONS: Array<{
     sitesOnly: true,
     markdownOrDir: true,
   },
+  {
+    id: "publishPodcast",
+    labelKey: "publishAsPodcast",
+    icon: <PublishPodcastIcon />,
+    dirsOnly: true,
+    sitesOnly: true,
+  },
+  {
+    id: "publishDownloads",
+    labelKey: "publishAsDownloads",
+    icon: <PublishDownloadsIcon />,
+    dirsOnly: true,
+    sitesOnly: true,
+  },
+  {
+    id: "publishBookshelf",
+    labelKey: "publishAsBookshelf",
+    icon: <PublishBookshelfIcon />,
+    dirsOnly: true,
+    sitesOnly: true,
+  },
   { id: "copy", labelKey: "copy", icon: <CopyIcon /> },
   { id: "cut", labelKey: "cut", icon: <CutIcon /> },
   { id: "delete", labelKey: "delete", icon: <DeleteIcon /> },
@@ -126,7 +153,10 @@ function FileActionSheet({
       action === "move" ||
       action === "publishSite" ||
       action === "publishDir" ||
-      action === "publishDocs";
+      action === "publishDocs" ||
+      action === "publishPodcast" ||
+      action === "publishDownloads" ||
+      action === "publishBookshelf";
     if (openDialog) window.setTimeout(() => onAction(action, target), 0);
     else onAction(action, target);
   };

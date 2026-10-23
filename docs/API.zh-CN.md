@@ -141,7 +141,7 @@ curl -X DELETE "https://<your-domain.com>/api/delete?path=folder/sub" \
 
 `POST /api/shares` 也接受文件夹 key，带不带尾斜杠均可（`"文件夹"` 与 `"文件夹/"` 指向同一目标，与 `/api/archive` 一致）。与文件分享一致，直接打开链接显示落地页（标注「文件夹（zip 下载）」）；点页面上的下载按钮，或直接请求 `GET /share/<token>?download=1`，会把整棵子树以 zip 流式下载（以该文件夹为根；提取码和过期时间照常生效）。分享管理（GET/POST/DELETE /api/shares）同时接受网页会话（Basic）和 API key。
 
-`GET /share/<token>`（无需鉴权）默认返回**服务端渲染、零脚本的落地页**（`prefers-color-scheme` 亮暗双套，语言跟随 `Accept-Language`）：文件名、类型、大小、分享时间，可预览类型还带在线预览（`<img>` / `<video>` / `<audio>` / `<iframe>`）；页面里的下载按钮指向 `?download=1`。同一 URL 上的查询参数：
+`GET /share/<token>`（无需鉴权）默认返回**服务端渲染的落地页**（`prefers-color-scheme` 亮暗双套，语言跟随 `Accept-Language`）：文件名、类型、大小、分享时间；图片/音视频/PDF 以及非 plain 的 `text/*` 用零脚本预览（`<img>` / `<video>` / `<audio>` / `<iframe>`）；**`text/plain` 改为等宽 `<pre>` 预览 + 一键复制**（截断上限约 512 KiB，完整内容请 `?download=1`），下载按钮仍指向 `?download=1`。网页「文本快传」即：写入 `.txt` 再 `POST /api/shares`，不新增接口。同一 URL 上的查询参数：
 
 - `?download=1` —— 原始字节 + `Content-Disposition: attachment`（ASCII `filename=` 回退 + UTF-8 `filename*`，`curl -OJ` 按文件名保存而不是 token；文件夹名为 `<文件夹名>.zip`）。**以前直接从分享链接下载的脚本必须改用这个参数** —— 文件和文件夹都一样（文件夹返回 `application/zip`；文件夹没有预览，`?raw=1` 同样返回 zip）。
 - `?raw=1` —— 原始字节内联返回（`Content-Disposition: inline`），仅对可预览类型（图片/音视频/PDF/文本）；其他类型仍是附件下载。响应保留既有安全加固 —— `Content-Security-Policy: sandbox`、`X-Content-Type-Options: nosniff` —— 并支持 `Range`（视频拖动/断点续传）。
@@ -221,6 +221,8 @@ curl -X DELETE "https://<your-domain.com>/api/images?id=<id>" \
 
 公开地址：`https://<SITES_HOST>/i/{id}`。SVG 响应带 `Content-Disposition: attachment` 与 `X-Content-Type-Options: nosniff`。
 
+Markdown 编辑器：设置页 **图床客户端** 可导出 ShareX `.sxcu` 与 Typora 一行 curl（占位符 `YOUR_API_KEY`）。PicGo / PicList：[`picgo-plugin-davflare`](../picgo-plugin-davflare/)。见 [sites.zh-CN.md](./sites.zh-CN.md#10-分钟把-r2-变成-markdown-图床)。
+
 ### MCP
 
 同源 Streamable HTTP MCP：`POST /mcp`（JSON-RPC 2.0）。鉴权与其它开放接口相同（`Authorization: Bearer <apiKey>` 或 `X-Api-Key`；不走网页会话，无 OAuth）。**MCP 依赖 API Key 开关** —— API Key 关闭（或 MCP 关闭）时 `/mcp` 返回 **404**。密钥缺失或无效返回 **HTTP 401**。工具：`list`、`upload`、`download`、`zip`、`mkdir`、`delete`、`search`、`move`、`copy`、`stat`、`share_create`、`share_list`、`share_revoke`、`trash_list`、`trash_restore`、`trash_empty`、`sites_list`、`sites_config`、`sites_delete`、`pull`、`push`、`publish_site`、`image_upload`、`image_list`、`image_delete`（包装上方 Open API）。超过 1 MiB 的上传自动改走分块（上限 **25 MB**；再大返回工具错误，请用网页端或 davflare-cli）。下载超过 1 MiB 用 `part` / `partSize` 分页。`zip` 走 `/api/archive` 打包目录（base64；同样 1 MiB / `part` 分页；硬上限 25 MB —— 再大请用 curl 调 `/api/archive`）。`delete` 默认进回收站；`hard=true` 为永久删除。可用 `trash_list` / `trash_restore` 捞回；`trash_empty` 永久清空回收站。`sites_*` 管理 `sites/` 下的静态站；`upload` / `delete` 也可以直接操作 `sites/<slug>/`。`pull` 走 `agents/{global|agent|agent/project}/{skills|rules|mcp}/` 并返回分层文件（合并：project 覆盖 agent 覆盖 global）；大文件与 `download` 一样分页。`push` 写入该树（`mcp.json` 只能用 `${env:...}`，不要明文密钥）。`publish_site` 把网盘目录同步到 `sites/{slug}/`（同名覆盖，不删 SPA 配置；站点开关关闭时 404）。 `image_upload` / `image_list` / `image_delete` 包装 `/api/images`（公开地址 `https://<SITES_HOST>/i/{id}` 和 Markdown；上限 20 MB；图床开关关闭时 404）。
@@ -275,7 +277,7 @@ Cursor（`mcp.json`）：
 
 ### 用 Cursor 试 MCP
 
-网页试玩台：打开 `#/mcp`（`#/settings` 也有入口），粘贴 API Key，点「列出工具」（`tools/list`）与「试一下」（只读 `list` 根目录），两项通过后复制 Cursor `mcp.json`。仍走现有 `POST /mcp`，不新增接口。
+网页试玩台：打开 `#/mcp`（`#/settings` 也有入口），粘贴 API Key，点「列出工具」（`tools/list`）与「试一下」（只读 `list` 根目录），两项通过后复制 Cursor `mcp.json`。桌面客户端不想粘贴明文密钥时，用设置页 → **接入 Claude / Cursor MCP**（环境变量占位；Cursor `mcp.json` + Claude Desktop `mcp-remote` 桥接）。仍走现有 `POST /mcp`，不新增接口。
 
 1. `#/settings` 保持 **API Key**、**MCP**、**静态站点** 打开，创建一把密钥。
 2. 粘贴到 Cursor 的 `mcp.json`（换成你的域名和密钥）——与上方 JSON 相同。

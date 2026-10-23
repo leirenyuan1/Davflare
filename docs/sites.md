@@ -128,6 +128,43 @@ Two zone settings on the sites hostname can override this:
 - All slugs share the sites origin (`sites.domain/a/` and `/b/`). Fine for one owner; do not host untrusted third-party HTML on the same sites host.
 - Do not put API keys in the uploaded HTML.
 
+## Markdown image host in 10 minutes
+
+Use the same `POST /api/images` + API Key from Markdown editors — **no new APIs**.
+
+1. Bind `SITES_HOST`, leave **API Key** and **Image host** on in `#/settings`, create a key.
+2. Export clients from the **Image host clients** card (or copy from [`agents/examples/image-host-export/`](../agents/examples/image-host-export/)):
+   - **ShareX** — `.sxcu` with Binary body, `Authorization` / `X-Api-Key`, `X-File-Name: {filename}`, URL `{json:url}`. Replace `YOUR_API_KEY` before import.
+   - **Typora** — Custom Command one-liner (`curl` + `sed` to print `url`); `$1` is the local path.
+   - **PicGo / PicList** — [`picgo-plugin-davflare`](../picgo-plugin-davflare/): set Site URL (drive origin) + API Key. Local install from the folder, or `picgo install picgo-plugin-davflare` after the repo owner runs `npm publish` in that package (**bots must not publish**).
+3. Upload once; expect `https://<SITES_HOST>/i/{id}` (and Markdown `![](url)` from the API response).
+
+Raw curl (same as Typora / scripts):
+
+```bash
+curl -X POST "https://<your-domain.com>/api/images" \
+  -H "Authorization: Bearer <apiKey>" \
+  -H "X-File-Name: shot.png" \
+  --data-binary @shot.png
+```
+
+
+## Software download page (“Releases on R2”)
+
+Select an installer/zip folder → **Publish as download page**. Writes `sites/{slug}/index.html` listing **filename, size, SHA-256**; optional sibling `README.md` becomes release notes. Same `POST /api/sites` surface as album/dir/docs/podcast (`downloads` payload) — **no new API**. Sample: [agents/examples/folder-downloads/](../agents/examples/folder-downloads/).
+
+## PDF library / ebook bookshelf
+
+Select a PDF (optional EPUB) folder → **Publish as PDF library**. Writes `sites/{slug}/index.html` listing **filename, size, open-in-browser / download**; existing thumbnails become covers. Same `POST /api/sites` surface (`bookshelf` payload) — **no new API**. Sample: [agents/examples/folder-bookshelf/](../agents/examples/folder-bookshelf/).
+
+## Podcast / RSS from a media folder
+
+Select an audio/video folder → **Publish as podcast / RSS**. Writes `sites/{slug}/feed.xml` (RSS 2.0 enclosures on `SITES_HOST`) plus a list player page. Same `POST /api/sites` surface as album/dir/docs — **no new API**. Sample: [agents/examples/podcast-rss/](../agents/examples/podcast-rss/).
+
+## Paste screenshot → image host
+
+In the file manager, `#/images`, or `#/settings` (Image host clients), press **Ctrl/Cmd+V**: clipboard images go through existing `POST /api/images`, and the toast one-click-copies `https://<SITES_HOST>/i/{id}`. In the file manager the same paste also queues into the current folder. Does not conflict with toolbar Quick paste (text). Sample: [agents/examples/paste-image-host/](../agents/examples/paste-image-host/).
+
 ## Image host UI
 
 Upload images in the drive UI (`#/images`): drag/drop, copy the public URL or Markdown `![](url)`, list and delete. Blobs live at `_$flaredrive$/img/{id}` with an unguessable id (not the original filename). Public URL is only `https://<SITES_HOST>/i/{id}` (no scheme in `SITES_HOST`). SVG is served as a download (`Content-Disposition: attachment` + `nosniff`), never as a navigable document.
